@@ -408,7 +408,7 @@ where
 		};
 		match onion_utils::decode_next_untagged_hop(
 			onion_decode_ss, &msg.onion_routing_packet.hop_data[..], msg.onion_routing_packet.hmac,
-			(control_tlvs_ss, &*custom_handler.deref(), &*logger.deref())
+			(control_tlvs_ss, custom_handler.deref(), logger.deref())
 		) {
 			Ok((Payload::Receive::<<<CMH as Deref>::Target as CustomOnionMessageHandler>::CustomMessage> {
 				message, control_tlvs: ReceiveControlTlvs::Unblinded(ReceiveTlvs { path_id }), reply_path,
