@@ -246,18 +246,30 @@ pub trait CustomOnionMessageHandler {
 	fn read_custom_message<R: io::Read>(&self, message_type: u64, buffer: &mut R) -> Result<Option<Self::CustomMessage>, msgs::DecodeError>;
 }
 
-pub enum ProcessedOnionMessage<CMH: Deref> where
+/// An processed incoming onion message, containing either a Forward (another onion)
+/// or a Receive payload with decrypted contents
+pub enum PeeledOnion<CMH: Deref> where
 	CMH::Target: CustomOnionMessageHandler,
 {
+	/// Forwarded onion, with the next node id and a new onion
 	Forward(PublicKey, msgs::OnionMessage),
-	Settle(Option<OnionMessageContents<<<CMH as Deref>::Target as CustomOnionMessageHandler>::CustomMessage>>, Option<[u8; 32]>, Option<BlindedPath>)
+	/// Received onion message, with decrypted contents, path_id, and reply path
+	Receive(OnionMessageContents<<<CMH as Deref>::Target as CustomOnionMessageHandler>::CustomMessage>, Option<[u8; 32]>, Option<BlindedPath>)
 }
 
 /// Errors that may occur when [receiving an onion message].
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReceiveError {
-	/// Ecdh
+	/// Ecdh shared secret error
 	Ecdh,
+	/// Failure to compute hext hop pubkey
+	NextHopPubkey,
+	/// Failure to computer blinding point
+	BlindingPoint,
+	/// ChaCha decryption or HMAC validation failed
+	Decrypt,
+	/// A final hop was encoded as a forwarding hop, or vice versa
+	BadEncoding
 }
 
 impl<ES: Deref, NS: Deref, L: Deref, MR: Deref, OMH: Deref, CMH: Deref>
@@ -374,15 +386,15 @@ where
 		}))
 	}
 
-	/// Processes an incoming onion message, returning either a forwarded packet or received payload
-	pub fn process_onion_message<T: CustomOnionMessageContents>(
+	/// Peel one layer off an incoming onion message
+	/// Returns either a Forward (another onion message), or Receive (decrypted content)
+	pub fn peel_onion<T: CustomOnionMessageContents>(
 		node_signer: &NS,
 		secp_ctx: &Secp256k1<secp256k1::All>,
 		logger: &L, 
-		offers_handler: &OMH,
 		custom_handler: &CMH,
 		msg: &msgs::OnionMessage,
-	) -> Result<ProcessedOnionMessage<CMH>, ReceiveError> {
+	) -> Result<PeeledOnion<CMH>, ReceiveError> {
 		let control_tlvs_ss = match node_signer.ecdh(Recipient::Node, &msg.blinding_point, None) {
 			Ok(ss) => ss,
 			Err(e) =>  {
@@ -417,18 +429,7 @@ where
 					"Received an onion message with path_id {:02x?} and {} reply_path",
 						path_id, if reply_path.is_some() { "a" } else { "no" });
 
-				let response = match message {
-					OnionMessageContents::Offers(msg) => {
-						offers_handler.handle_message(msg)
-							.map(|msg| OnionMessageContents::Offers(msg))
-					},
-					OnionMessageContents::Custom(msg) => {
-						custom_handler.handle_custom_message(msg)
-							.map(|msg| OnionMessageContents::Custom(msg))
-					},
-				};
-
-				Ok(ProcessedOnionMessage::Settle(response, path_id, reply_path))
+				Ok(PeeledOnion::Receive(message, path_id, reply_path))
 			},
 			Ok((Payload::Forward(ForwardControlTlvs::Unblinded(ForwardTlvs {
 				next_node_id, next_blinding_override
@@ -442,7 +443,7 @@ where
 					Ok(pk) => pk,
 					Err(e) => {
 						log_trace!(logger, "Failed to compute next hop packet pubkey: {}", e);
-						return Err(ReceiveError::Ecdh)
+						return Err(ReceiveError::NextHopPubkey)
 					}
 				};
 				let outgoing_packet = Packet {
@@ -461,7 +462,7 @@ where
 								Ok(bp) => bp,
 								Err(e) => {
 									log_trace!(logger, "Failed to compute next blinding point: {}", e);
-									return Err(ReceiveError::Ecdh)
+									return Err(ReceiveError::BlindingPoint)
 								}
 							}
 						}
@@ -469,15 +470,15 @@ where
 					onion_routing_packet: outgoing_packet,
 				};
 
-				Ok(ProcessedOnionMessage::Forward(next_node_id, onion_message))
+				Ok(PeeledOnion::Forward(next_node_id, onion_message))
 			},
 			Err(e) => {
 				log_trace!(logger, "Errored decoding onion message packet: {:?}", e);
-				Err(ReceiveError::Ecdh)
+				Err(ReceiveError::Decrypt)
 			},
 			_ => {
 				log_trace!(logger, "Received bogus onion message packet, either the sender encoded a final hop as a forwarding hop or vice versa");
-				Err(ReceiveError::Ecdh)
+				Err(ReceiveError::BadEncoding)
 			},
 		}
 	}
@@ -582,20 +583,29 @@ where
 	/// soon we'll delegate the onion message to a handler that can generate invoices or send
 	/// payments.
 	fn handle_onion_message(&self, _peer_node_id: &PublicKey, msg: &msgs::OnionMessage) {
-		match Self::process_onion_message::<<<CMH as Deref>::Target as CustomOnionMessageHandler>::CustomMessage>(
-			&self.node_signer, 
-			&self.secp_ctx, 
-			&self.logger, 
-			&self.offers_handler, 
-			&self.custom_handler, 
+		match Self::peel_onion::<<<CMH as Deref>::Target as CustomOnionMessageHandler>::CustomMessage>(
+			&self.node_signer,
+			&self.secp_ctx,
+			&self.logger,
+			&self.custom_handler,
 			msg
 		) {
-			Ok(ProcessedOnionMessage::Settle(response, path_id, reply_path)) => {
+			Ok(PeeledOnion::Receive(message, path_id, reply_path)) => {
+				let response = match message {
+					OnionMessageContents::Offers(msg) => {
+						self.offers_handler.handle_message(msg)
+							.map(|msg| OnionMessageContents::Offers(msg))
+					},
+					OnionMessageContents::Custom(msg) => {
+						self.custom_handler.handle_custom_message(msg)
+							.map(|msg| OnionMessageContents::Custom(msg))
+					},
+				};
 				if let Some(response) = response {
 					self.respond_with_onion_message(response, path_id, reply_path);
 				}
 			},
-			Ok(ProcessedOnionMessage::Forward(next_node_id, onion_message)) => {
+			Ok(PeeledOnion::Forward(next_node_id, onion_message)) => {
 				let mut pending_per_peer_msgs = self.pending_messages.lock().unwrap();
 				if outbound_buffer_full(&next_node_id, &pending_per_peer_msgs) {
 					log_trace!(self.logger, "Dropping forwarded onion message to peer {:?}: outbound buffer full", next_node_id);
