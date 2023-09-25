@@ -264,7 +264,7 @@ pub enum ReceiveError {
 	Ecdh,
 	/// Failure to compute hext hop pubkey
 	NextHopPubkey,
-	/// Failure to computer blinding point
+	/// Failure to compute blinding point
 	BlindingPoint,
 	/// ChaCha decryption or HMAC validation failed
 	Decrypt,
@@ -386,7 +386,7 @@ where
 		}))
 	}
 
-	/// Peel one layer off an incoming onion message
+	/// Decode one layer of an incoming onion message
 	/// Returns either a Forward (another onion message), or Receive (decrypted content)
 	pub fn peel_onion<T: CustomOnionMessageContents>(
 		node_signer: &NS,
