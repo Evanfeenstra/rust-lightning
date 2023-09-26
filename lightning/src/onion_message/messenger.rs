@@ -246,6 +246,32 @@ pub trait CustomOnionMessageHandler {
 	fn read_custom_message<R: io::Read>(&self, message_type: u64, buffer: &mut R) -> Result<Option<Self::CustomMessage>, msgs::DecodeError>;
 }
 
+/// An processed incoming onion message, containing either a Forward (another onion)
+/// or a Receive payload with decrypted contents
+pub enum PeeledOnion<CMH: Deref> where
+	CMH::Target: CustomOnionMessageHandler,
+{
+	/// Forwarded onion, with the next node id and a new onion
+	Forward(PublicKey, msgs::OnionMessage),
+	/// Received onion message, with decrypted contents, path_id, and reply path
+	Receive(OnionMessageContents<<<CMH as Deref>::Target as CustomOnionMessageHandler>::CustomMessage>, Option<[u8; 32]>, Option<BlindedPath>)
+}
+
+/// Errors that may occur when [receiving an onion message].
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReceiveError {
+	/// Ecdh shared secret error
+	Ecdh,
+	/// Failure to compute hext hop pubkey
+	NextHopPubkey,
+	/// Failure to compute blinding point
+	BlindingPoint,
+	/// ChaCha decryption or HMAC validation failed
+	Decrypt,
+	/// A final hop was encoded as a forwarding hop, or vice versa
+	BadEncoding
+}
+
 impl<ES: Deref, NS: Deref, L: Deref, MR: Deref, OMH: Deref, CMH: Deref>
 OnionMessenger<ES, NS, L, MR, OMH, CMH>
 where
@@ -360,6 +386,103 @@ where
 		}))
 	}
 
+	/// Decode one layer of an incoming onion message
+	/// Returns either a Forward (another onion message), or Receive (decrypted content)
+	pub fn peel_onion<T: CustomOnionMessageContents>(
+		node_signer: &NS,
+		secp_ctx: &Secp256k1<secp256k1::All>,
+		logger: &L, 
+		custom_handler: &CMH,
+		msg: &msgs::OnionMessage,
+	) -> Result<PeeledOnion<CMH>, ReceiveError> {
+		let control_tlvs_ss = match node_signer.ecdh(Recipient::Node, &msg.blinding_point, None) {
+			Ok(ss) => ss,
+			Err(e) =>  {
+				log_error!(logger, "Failed to retrieve node secret: {:?}", e);
+				return Err(ReceiveError::Ecdh);
+			}
+		};
+		let onion_decode_ss = {
+			let blinding_factor = {
+				let mut hmac = HmacEngine::<Sha256>::new(b"blinded_node_id");
+				hmac.input(control_tlvs_ss.as_ref());
+				Hmac::from_engine(hmac).into_inner()
+			};
+			match node_signer.ecdh(Recipient::Node, &msg.onion_routing_packet.public_key,
+				Some(&Scalar::from_be_bytes(blinding_factor).unwrap()))
+			{
+				Ok(ss) => ss.secret_bytes(),
+				Err(()) => {
+					log_trace!(logger, "Failed to compute onion packet shared secret");
+					return Err(ReceiveError::Ecdh);
+				}
+			}
+		};
+		match onion_utils::decode_next_untagged_hop(
+			onion_decode_ss, &msg.onion_routing_packet.hop_data[..], msg.onion_routing_packet.hmac,
+			(control_tlvs_ss, custom_handler.deref(), logger.deref())
+		) {
+			Ok((Payload::Receive::<<<CMH as Deref>::Target as CustomOnionMessageHandler>::CustomMessage> {
+				message, control_tlvs: ReceiveControlTlvs::Unblinded(ReceiveTlvs { path_id }), reply_path,
+			}, None)) => {
+				log_trace!(logger,
+					"Received an onion message with path_id {:02x?} and {} reply_path",
+						path_id, if reply_path.is_some() { "a" } else { "no" });
+
+				Ok(PeeledOnion::Receive(message, path_id, reply_path))
+			},
+			Ok((Payload::Forward(ForwardControlTlvs::Unblinded(ForwardTlvs {
+				next_node_id, next_blinding_override
+			})), Some((next_hop_hmac, new_packet_bytes)))) => {
+				// TODO: we need to check whether `next_node_id` is our node, in which case this is a dummy
+				// blinded hop and this onion message is destined for us. In this situation, we should keep
+				// unwrapping the onion layers to get to the final payload. Since we don't have the option
+				// of creating blinded paths with dummy hops currently, we should be ok to not handle this
+				// for now.
+				let new_pubkey = match onion_utils::next_hop_pubkey(&secp_ctx, msg.onion_routing_packet.public_key, &onion_decode_ss) {
+					Ok(pk) => pk,
+					Err(e) => {
+						log_trace!(logger, "Failed to compute next hop packet pubkey: {}", e);
+						return Err(ReceiveError::NextHopPubkey)
+					}
+				};
+				let outgoing_packet = Packet {
+					version: 0,
+					public_key: new_pubkey,
+					hop_data: new_packet_bytes,
+					hmac: next_hop_hmac,
+				};
+				let onion_message = msgs::OnionMessage {
+					blinding_point: match next_blinding_override {
+						Some(blinding_point) => blinding_point,
+						None => {
+							match onion_utils::next_hop_pubkey(
+								&secp_ctx, msg.blinding_point, control_tlvs_ss.as_ref()
+							) {
+								Ok(bp) => bp,
+								Err(e) => {
+									log_trace!(logger, "Failed to compute next blinding point: {}", e);
+									return Err(ReceiveError::BlindingPoint)
+								}
+							}
+						}
+					},
+					onion_routing_packet: outgoing_packet,
+				};
+
+				Ok(PeeledOnion::Forward(next_node_id, onion_message))
+			},
+			Err(e) => {
+				log_trace!(logger, "Errored decoding onion message packet: {:?}", e);
+				Err(ReceiveError::Decrypt)
+			},
+			_ => {
+				log_trace!(logger, "Received bogus onion message packet, either the sender encoded a final hop as a forwarding hop or vice versa");
+				Err(ReceiveError::BadEncoding)
+			},
+		}
+	}
+
 	fn respond_with_onion_message<T: CustomOnionMessageContents>(
 		&self, response: OnionMessageContents<T>, path_id: Option<[u8; 32]>,
 		reply_path: Option<BlindedPath>
@@ -460,40 +583,14 @@ where
 	/// soon we'll delegate the onion message to a handler that can generate invoices or send
 	/// payments.
 	fn handle_onion_message(&self, _peer_node_id: &PublicKey, msg: &msgs::OnionMessage) {
-		let control_tlvs_ss = match self.node_signer.ecdh(Recipient::Node, &msg.blinding_point, None) {
-			Ok(ss) => ss,
-			Err(e) =>  {
-				log_error!(self.logger, "Failed to retrieve node secret: {:?}", e);
-				return
-			}
-		};
-		let onion_decode_ss = {
-			let blinding_factor = {
-				let mut hmac = HmacEngine::<Sha256>::new(b"blinded_node_id");
-				hmac.input(control_tlvs_ss.as_ref());
-				Hmac::from_engine(hmac).into_inner()
-			};
-			match self.node_signer.ecdh(Recipient::Node, &msg.onion_routing_packet.public_key,
-				Some(&Scalar::from_be_bytes(blinding_factor).unwrap()))
-			{
-				Ok(ss) => ss.secret_bytes(),
-				Err(()) => {
-					log_trace!(self.logger, "Failed to compute onion packet shared secret");
-					return
-				}
-			}
-		};
-		match onion_utils::decode_next_untagged_hop(
-			onion_decode_ss, &msg.onion_routing_packet.hop_data[..], msg.onion_routing_packet.hmac,
-			(control_tlvs_ss, &*self.custom_handler, &*self.logger)
+		match Self::peel_onion::<<<CMH as Deref>::Target as CustomOnionMessageHandler>::CustomMessage>(
+			&self.node_signer,
+			&self.secp_ctx,
+			&self.logger,
+			&self.custom_handler,
+			msg
 		) {
-			Ok((Payload::Receive::<<<CMH as Deref>::Target as CustomOnionMessageHandler>::CustomMessage> {
-				message, control_tlvs: ReceiveControlTlvs::Unblinded(ReceiveTlvs { path_id }), reply_path,
-			}, None)) => {
-				log_trace!(self.logger,
-					"Received an onion message with path_id {:02x?} and {} reply_path",
-						path_id, if reply_path.is_some() { "a" } else { "no" });
-
+			Ok(PeeledOnion::Receive(message, path_id, reply_path)) => {
 				let response = match message {
 					OnionMessageContents::Offers(msg) => {
 						self.offers_handler.handle_message(msg)
@@ -504,59 +601,20 @@ where
 							.map(|msg| OnionMessageContents::Custom(msg))
 					},
 				};
-
 				if let Some(response) = response {
 					self.respond_with_onion_message(response, path_id, reply_path);
 				}
 			},
-			Ok((Payload::Forward(ForwardControlTlvs::Unblinded(ForwardTlvs {
-				next_node_id, next_blinding_override
-			})), Some((next_hop_hmac, new_packet_bytes)))) => {
-				// TODO: we need to check whether `next_node_id` is our node, in which case this is a dummy
-				// blinded hop and this onion message is destined for us. In this situation, we should keep
-				// unwrapping the onion layers to get to the final payload. Since we don't have the option
-				// of creating blinded paths with dummy hops currently, we should be ok to not handle this
-				// for now.
-				let new_pubkey = match onion_utils::next_hop_pubkey(&self.secp_ctx, msg.onion_routing_packet.public_key, &onion_decode_ss) {
-					Ok(pk) => pk,
-					Err(e) => {
-						log_trace!(self.logger, "Failed to compute next hop packet pubkey: {}", e);
-						return
-					}
-				};
-				let outgoing_packet = Packet {
-					version: 0,
-					public_key: new_pubkey,
-					hop_data: new_packet_bytes,
-					hmac: next_hop_hmac,
-				};
-				let onion_message = msgs::OnionMessage {
-					blinding_point: match next_blinding_override {
-						Some(blinding_point) => blinding_point,
-						None => {
-							match onion_utils::next_hop_pubkey(
-								&self.secp_ctx, msg.blinding_point, control_tlvs_ss.as_ref()
-							) {
-								Ok(bp) => bp,
-								Err(e) => {
-									log_trace!(self.logger, "Failed to compute next blinding point: {}", e);
-									return
-								}
-							}
-						}
-					},
-					onion_routing_packet: outgoing_packet,
-				};
-
+			Ok(PeeledOnion::Forward(next_node_id, onion_message)) => {
 				let mut pending_per_peer_msgs = self.pending_messages.lock().unwrap();
 				if outbound_buffer_full(&next_node_id, &pending_per_peer_msgs) {
 					log_trace!(self.logger, "Dropping forwarded onion message to peer {:?}: outbound buffer full", next_node_id);
 					return
 				}
-
+	
 				#[cfg(fuzzing)]
 				pending_per_peer_msgs.entry(next_node_id).or_insert_with(VecDeque::new);
-
+	
 				match pending_per_peer_msgs.entry(next_node_id) {
 					hash_map::Entry::Vacant(_) => {
 						log_trace!(self.logger, "Dropping forwarded onion message to disconnected peer {:?}", next_node_id);
@@ -566,15 +624,12 @@ where
 						e.get_mut().push_back(onion_message);
 						log_trace!(self.logger, "Forwarding an onion message to peer {}", next_node_id);
 					}
-				};
+				}
 			},
 			Err(e) => {
-				log_trace!(self.logger, "Errored decoding onion message packet: {:?}", e);
-			},
-			_ => {
-				log_trace!(self.logger, "Received bogus onion message packet, either the sender encoded a final hop as a forwarding hop or vice versa");
-			},
-		};
+				log_error!(self.logger, "Failed to process onion message {:?}", e);
+			}
+		}
 	}
 
 	fn peer_connected(&self, their_node_id: &PublicKey, init: &msgs::Init, _inbound: bool) -> Result<(), ()> {
