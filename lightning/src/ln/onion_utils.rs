@@ -7,6 +7,8 @@
 // You may not use this file except in accordance with one or both of these
 // licenses.
 
+//! Utils for creating BOLT04 onion payments 
+
 use crate::ln::{PaymentHash, PaymentPreimage};
 use crate::ln::channelmanager::{HTLCSource, RecipientOnionFields};
 use crate::ln::msgs;
@@ -34,7 +36,8 @@ use crate::io::{Cursor, Read};
 use core::convert::{AsMut, TryInto};
 use core::ops::Deref;
 
-pub(crate) struct OnionKeys {
+/// Keys for encrypting/decrypting Onion Messages
+pub struct OnionKeys {
 	#[cfg(test)]
 	pub(crate) shared_secret: SharedSecret,
 	#[cfg(test)]
@@ -142,8 +145,9 @@ where
 	Ok(())
 }
 
+/// Generate/collect the keys needed to create an onion packet
 // can only fail if an intermediary hop has an invalid public key or session_priv is invalid
-pub(super) fn construct_onion_keys<T: secp256k1::Signing>(secp_ctx: &Secp256k1<T>, path: &Path, session_priv: &SecretKey) -> Result<Vec<OnionKeys>, secp256k1::Error> {
+pub fn construct_onion_keys<T: secp256k1::Signing>(secp_ctx: &Secp256k1<T>, path: &Path, session_priv: &SecretKey) -> Result<Vec<OnionKeys>, secp256k1::Error> {
 	let mut res = Vec::with_capacity(path.hops.len());
 
 	construct_onion_keys_callback(secp_ctx, &path, session_priv,
@@ -166,7 +170,7 @@ pub(super) fn construct_onion_keys<T: secp256k1::Signing>(secp_ctx: &Secp256k1<T
 }
 
 /// returns the hop data, as well as the first-hop value_msat and CLTV value we should send.
-pub(super) fn build_onion_payloads(path: &Path, total_msat: u64, mut recipient_onion: RecipientOnionFields, starting_htlc_offset: u32, keysend_preimage: &Option<PaymentPreimage>) -> Result<(Vec<msgs::OutboundOnionPayload>, u64, u32), APIError> {
+pub fn build_onion_payloads(path: &Path, total_msat: u64, mut recipient_onion: RecipientOnionFields, starting_htlc_offset: u32, keysend_preimage: &Option<PaymentPreimage>) -> Result<(Vec<msgs::OutboundOnionPayload>, u64, u32), APIError> {
 	let mut cur_value_msat = 0u64;
 	let mut cur_cltv = starting_htlc_offset;
 	let mut last_short_channel_id = 0;
@@ -252,7 +256,8 @@ fn shift_slice_right(arr: &mut [u8], amt: usize) {
 	}
 }
 
-pub(super) fn construct_onion_packet(
+/// Construct the onion packet to send to next peer
+pub fn construct_onion_packet(
 	payloads: Vec<msgs::OutboundOnionPayload>, onion_keys: Vec<OnionKeys>, prng_seed: [u8; 32],
 	associated_data: &PaymentHash
 ) -> Result<msgs::OnionPacket, ()> {

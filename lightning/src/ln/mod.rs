@@ -35,9 +35,11 @@ pub(crate) mod channel;
 // Re-export ChannelId
 pub use channel_id::ChannelId;
 
-pub(crate) mod onion_utils;
+pub mod onion_utils;
 mod outbound_payment;
 pub mod wire;
+
+pub use outbound_payment::RecipientOnionFields;
 
 // Older rustc (which we support) refuses to let us call the get_payment_preimage_hash!() macro
 // without the node parameter being mut. This is incorrect, and thus newer rustcs will complain

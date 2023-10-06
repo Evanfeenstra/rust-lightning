@@ -24,6 +24,7 @@ pub mod string;
 pub mod wakers;
 #[cfg(fuzzing)]
 pub mod base32;
+pub mod scid_utils;
 #[cfg(not(fuzzing))]
 pub(crate) mod base32;
 
@@ -34,7 +35,6 @@ pub(crate) mod chacha20;
 pub(crate) mod poly1305;
 pub(crate) mod chacha20poly1305rfc;
 pub(crate) mod transaction_utils;
-pub(crate) mod scid_utils;
 pub(crate) mod time;
 
 pub mod indexed_map;
