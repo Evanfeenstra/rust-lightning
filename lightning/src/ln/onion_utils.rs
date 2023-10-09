@@ -9,7 +9,7 @@
 
 //! Utils for creating BOLT04 onion payments 
 
-use crate::ln::{PaymentHash, PaymentPreimage};
+use crate::ln::{PaymentHash, PaymentPreimage, PaymentSecret};
 use crate::ln::channelmanager::{HTLCSource, RecipientOnionFields};
 use crate::ln::msgs;
 use crate::ln::wire::Encode;
@@ -20,6 +20,7 @@ use crate::util::chacha20::{ChaCha20, ChaChaReader};
 use crate::util::errors::{self, APIError};
 use crate::util::ser::{Readable, ReadableArgs, Writeable, Writer, LengthCalculatingWriter};
 use crate::util::logger::Logger;
+use crate::blinded_path::payment::PaymentConstraints;
 
 use bitcoin::hashes::{Hash, HashEngine};
 use bitcoin::hashes::cmp::fixed_time_eq;
@@ -893,7 +894,7 @@ impl NextPacketBytes for Vec<u8> {
 }
 
 /// Data decrypted from a payment's onion payload.
-pub(crate) enum Hop {
+pub enum Hop {
 	/// This onion payload was for us, not for forwarding to a next-hop. Contains information for
 	/// verifying the incoming payment.
 	Receive(msgs::InboundOnionPayload),
@@ -910,15 +911,19 @@ pub(crate) enum Hop {
 
 /// Error returned when we fail to decode the onion packet.
 #[derive(Debug)]
-pub(crate) enum OnionDecodeErr {
+pub enum OnionDecodeErr {
 	/// The HMAC of the onion packet did not match the hop data.
 	Malformed {
+		/// HMAC error message
 		err_msg: &'static str,
+		/// HMAC error code
 		err_code: u16,
 	},
 	/// We failed to decode the onion payload.
 	Relay {
+		/// Decode error message
 		err_msg: &'static str,
+		/// Decode error code
 		err_code: u16,
 	},
 }
@@ -938,6 +943,129 @@ pub(crate) fn decode_next_payment_hop<NS: Deref>(
 		},
 		Err(e) => Err(e),
 	}
+}
+
+/// final received onion hop data
+#[derive(Clone, Debug)]
+pub struct FinalOnionHopData {
+	/// payment_secret to authenticate sender to the receiver
+	pub payment_secret: PaymentSecret,
+	/// The total value, in msat, of the payment as received by the ultimate recipient.
+	pub total_msat: u64,
+}
+
+impl From<msgs::FinalOnionHopData> for FinalOnionHopData {
+    fn from(data: msgs::FinalOnionHopData) -> Self {
+       	Self {
+			payment_secret: data.payment_secret,
+			total_msat: data.total_msat,
+		}
+    }
+}
+
+/// Received payment, of either regular or blinded type
+#[derive(Debug)]
+pub enum ReceivedPayment {
+	/// Regular (unblinded) payment
+	Regular {
+		/// payment secret and total msat
+		payment_data: Option<FinalOnionHopData>,
+		/// custom payment metadata included in the payment
+		payment_metadata: Option<Vec<u8>>,
+		/// preimage used in spontaneous payment
+		keysend_preimage: Option<PaymentPreimage>,
+		/// custom TLV records included in the payment
+		custom_tlvs: Vec<(u64, Vec<u8>)>,
+		/// amount received
+		amt_msat: u64,
+		/// outgoing ctlv
+		outgoing_cltv_value: u32,
+	},
+	/// Blinded payment
+	Blinded {
+		/// amount received
+		amt_msat: u64,
+		/// amount received plus fees paid
+		total_msat: u64,
+		/// outgoing cltv
+		outgoing_cltv_value: u32,
+		/// Payment secret 
+		payment_secret: PaymentSecret,
+		/// Payment contraints for a blinded path
+		payment_constraints: PaymentConstraints,
+		/// Blinding point from intro node
+		intro_node_blinding_point: PublicKey,
+	}
+}
+
+impl std::convert::TryFrom<msgs::InboundOnionPayload> for ReceivedPayment {
+    type Error = ();
+
+    fn try_from(pld: msgs::InboundOnionPayload) -> Result<Self, Self::Error> {
+		match pld {
+			msgs::InboundOnionPayload::Forward { short_channel_id: _, amt_to_forward: _, outgoing_cltv_value: _ } => {
+				Err(())
+			},
+			msgs::InboundOnionPayload::Receive { payment_data, payment_metadata, keysend_preimage, custom_tlvs, amt_msat, outgoing_cltv_value } => {
+				let pd = match payment_data {
+					Some(p) => Some(p.into()),
+					None => None,
+				};
+				Ok(Self::Regular { payment_data: pd, payment_metadata, keysend_preimage, custom_tlvs, amt_msat, outgoing_cltv_value })
+			},
+			msgs::InboundOnionPayload::BlindedReceive { amt_msat, total_msat, outgoing_cltv_value, payment_secret, payment_constraints, intro_node_blinding_point } => {
+				Ok(Self::Blinded { amt_msat, total_msat, outgoing_cltv_value, payment_secret, payment_constraints, intro_node_blinding_point })
+			}
+		}
+    }
+}
+
+/// Data decrypted from a payment's onion payload.
+#[derive(Debug)]
+pub enum PeeledPayment {
+	/// This onion payload was for us, not for forwarding to a next-hop. Contains information for
+	/// verifying the incoming payment.
+	Receive(ReceivedPayment),
+	/// This onion payload needs to be forwarded to a next-hop.
+	Forward(msgs::OnionPacket),
+}
+
+/// Unwrap one layer of an incoming HTLC, returning either another forwarded onion, or a received payment
+pub fn peel_payment_onion<NS: Deref, F>(
+	shared_secret: [u8; 32], hop_data: &[u8], hmac_bytes: [u8; 32], payment_hash: PaymentHash,
+	node_signer: &NS, pubkey_getter: F,
+) -> Result<PeeledPayment, OnionDecodeErr> 
+where 
+	NS::Target: NodeSigner,
+	F: FnOnce(u64) -> Option<PublicKey> 
+{
+	let hop = decode_next_payment_hop(shared_secret, hop_data, hmac_bytes, payment_hash, node_signer)?;
+	let peeled = match hop {
+		Hop::Forward { next_hop_data, next_hop_hmac, new_packet_bytes } => {
+			if let msgs::InboundOnionPayload::Forward{short_channel_id, amt_to_forward, outgoing_cltv_value} = next_hop_data {
+				let public_key = pubkey_getter(short_channel_id).ok_or(secp256k1::Error::InvalidPublicKey);
+				PeeledPayment::Forward(msgs::OnionPacket {
+					version: 0,
+					public_key,
+					hop_data: new_packet_bytes,
+					hmac: next_hop_hmac,
+				})
+			} else {
+				return Err(OnionDecodeErr::Relay {
+					err_msg: "Unable to decode our hop data",
+					err_code: 0x2000 | 2,
+				});
+			}
+		},
+		Hop::Receive(ab) => {
+			let payload: ReceivedPayment = ab.try_into().map_err(|_| OnionDecodeErr::Relay {
+				err_msg: "Unable to decode our hop data",
+				err_code: 0x2000 | 2,
+			})?;
+			PeeledPayment::Receive(payload)
+		},
+	};
+	Ok(peeled)
 }
 
 pub(crate) fn decode_next_untagged_hop<T, R: ReadableArgs<T>, N: NextPacketBytes>(shared_secret: [u8; 32], hop_data: &[u8], hmac_bytes: [u8; 32], read_args: T) -> Result<(R, Option<([u8; 32], N)>), OnionDecodeErr> {
