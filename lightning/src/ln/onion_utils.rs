@@ -1027,7 +1027,7 @@ pub enum PeeledPayment {
 	/// verifying the incoming payment.
 	Receive(ReceivedPayment),
 	/// This onion payload to be forwarded to the next short channel id
-	Forward((u64, msgs::OnionPacket)),
+	Forward(u64, msgs::OnionPacket),
 }
 
 /// Unwrap one layer of an incoming HTLC, returning either another forwarded onion, or a received payment
@@ -1045,12 +1045,12 @@ where
 
 				let next_packet_pk = next_hop_pubkey(secp_ctx, onion.public_key.unwrap(), &shared_secret);
 
-				PeeledPayment::Forward((short_channel_id, msgs::OnionPacket {
+				PeeledPayment::Forward(short_channel_id, msgs::OnionPacket {
 					version: 0,
 					public_key: next_packet_pk,
 					hop_data: new_packet_bytes,
 					hmac: next_hop_hmac,
-				}))
+				})
 			} else {
 				return Err(OnionDecodeErr::Relay {
 					err_msg: "Unable to decode our hop data",
