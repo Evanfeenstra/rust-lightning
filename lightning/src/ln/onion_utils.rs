@@ -1026,8 +1026,8 @@ pub enum PeeledPayment {
 	/// This onion payload was for us, not for forwarding to a next-hop. Contains information for
 	/// verifying the incoming payment.
 	Receive(ReceivedPayment),
-	/// This onion payload to be forwarded to the next short channel id
-	Forward(u64, msgs::OnionPacket),
+	/// This onion payload to be forwarded to the next short channel id (with amount)
+	Forward(u64, u64, msgs::OnionPacket),
 }
 
 /// Unwrap one layer of an incoming HTLC, returning either another forwarded onion, or a received payment
@@ -1041,11 +1041,11 @@ where
 	let hop = decode_next_payment_hop(shared_secret, &onion.hop_data[..], onion.hmac, payment_hash, node_signer)?;
 	let peeled = match hop {
 		Hop::Forward { next_hop_data, next_hop_hmac, new_packet_bytes } => {
-			if let msgs::InboundOnionPayload::Forward{short_channel_id, amt_to_forward: _, outgoing_cltv_value: _} = next_hop_data {
+			if let msgs::InboundOnionPayload::Forward{short_channel_id, amt_to_forward, outgoing_cltv_value: _} = next_hop_data {
 
 				let next_packet_pk = next_hop_pubkey(secp_ctx, onion.public_key.unwrap(), &shared_secret);
 
-				PeeledPayment::Forward(short_channel_id, msgs::OnionPacket {
+				PeeledPayment::Forward(short_channel_id, amt_to_forward, msgs::OnionPacket {
 					version: 0,
 					public_key: next_packet_pk,
 					hop_data: new_packet_bytes,
