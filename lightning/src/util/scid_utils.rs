@@ -70,7 +70,7 @@ pub fn scid_from_parts(block: u64, tx_index: u64, vout_index: u64) -> Result<u64
 /// 2) phantom node payments, to get an scid for the phantom node's phantom channel
 /// 3) payments intended to be intercepted will route using a fake scid (this is typically used so
 ///    the forwarding node can open a JIT channel to the next hop)
-pub(crate) mod fake_scid {
+pub mod fake_scid {
 	use bitcoin::hash_types::BlockHash;
 	use bitcoin::hashes::hex::FromHex;
 	use crate::sign::EntropySource;
