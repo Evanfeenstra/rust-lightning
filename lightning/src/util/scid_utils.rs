@@ -95,9 +95,12 @@ pub mod fake_scid {
 	/// receipt, and handle the HTLC accordingly. The namespace identifier is encrypted when encoded
 	/// into the fake scid.
 	#[derive(Copy, Clone)]
-	pub(crate) enum Namespace {
+	pub enum Namespace {
+		/// Phantom node short channel ids
 		Phantom,
+		/// Aliases for outbound channels
 		OutboundAlias,
+		/// Namespace for intercepted payments
 		Intercept
 	}
 
@@ -106,7 +109,7 @@ pub mod fake_scid {
 		/// between segwit activation and the current best known height, and the tx index and output
 		/// index are also selected from a "reasonable" range. We add this logic because it makes it
 		/// non-obvious at a glance that the scid is fake, e.g. if it appears in invoice route hints.
-		pub(crate) fn get_fake_scid<ES: Deref>(&self, highest_seen_blockheight: u32, genesis_hash: &BlockHash, fake_scid_rand_bytes: &[u8; 32], entropy_source: &ES) -> u64
+		pub fn get_fake_scid<ES: Deref>(&self, highest_seen_blockheight: u32, genesis_hash: &BlockHash, fake_scid_rand_bytes: &[u8; 32], entropy_source: &ES) -> u64
 			where ES::Target: EntropySource,
 		{
 			// Ensure we haven't created a namespace that doesn't fit into the 3 bits we've allocated for
