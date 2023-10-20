@@ -28,6 +28,7 @@ mod functional_tests;
 
 // Re-export structs so they can be imported with just the `onion_message::` module prefix.
 pub use self::messenger::{CustomOnionMessageHandler, DefaultMessageRouter, Destination, MessageRouter, OnionMessageContents, OnionMessagePath, OnionMessenger, PeeledOnion, PendingOnionMessage, SendError, SimpleArcOnionMessenger, SimpleRefOnionMessenger};
+pub use self::messenger::{create_onion_message, peel_onion_message};
 pub use self::offers::{OffersMessage, OffersMessageHandler};
 pub use self::packet::{Packet, ParsedOnionMessageContents};
 pub(crate) use self::packet::ControlTlvs;
