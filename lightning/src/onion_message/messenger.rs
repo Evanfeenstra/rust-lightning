@@ -19,6 +19,7 @@ use crate::blinded_path::BlindedPath;
 use crate::blinded_path::message::{advance_path_by_one, ForwardTlvs, ReceiveTlvs};
 use crate::blinded_path::utils;
 use crate::sign::{EntropySource, KeysManager, NodeSigner, Recipient};
+#[cfg(not(c_bindings))]
 use crate::ln::channelmanager::{SimpleArcChannelManager, SimpleRefChannelManager};
 use crate::ln::features::{InitFeatures, NodeFeatures};
 use crate::ln::msgs::{self, OnionMessage, OnionMessageHandler};
@@ -158,6 +159,7 @@ where
 ///
 /// These are obtained when released from [`OnionMessenger`]'s handlers after which they are
 /// enqueued for sending.
+#[cfg(not(c_bindings))]
 pub struct PendingOnionMessage<T: OnionMessageContents> {
 	/// The message contents to send in an [`OnionMessage`].
 	pub contents: T,
@@ -167,6 +169,22 @@ pub struct PendingOnionMessage<T: OnionMessageContents> {
 
 	/// A reply path to include in the [`OnionMessage`] for a response.
 	pub reply_path: Option<BlindedPath>,
+}
+
+#[cfg(c_bindings)]
+/// An [`OnionMessage`] for [`OnionMessenger`] to send.
+///
+/// These are obtained when released from [`OnionMessenger`]'s handlers after which they are
+/// enqueued for sending.
+pub type PendingOnionMessage<T: OnionMessageContents> = (T, Destination, Option<BlindedPath>);
+
+pub(crate) fn new_pending_onion_message<T: OnionMessageContents>(
+	contents: T, destination: Destination, reply_path: Option<BlindedPath>
+) -> PendingOnionMessage<T> {
+	#[cfg(not(c_bindings))]
+	return PendingOnionMessage { contents, destination, reply_path };
+	#[cfg(c_bindings)]
+	return (contents, destination, reply_path);
 }
 
 /// A trait defining behavior for routing an [`OnionMessage`].
@@ -285,7 +303,15 @@ pub trait CustomOnionMessageHandler {
 	///
 	/// Typically, this is used for messages initiating a message flow rather than in response to
 	/// another message. The latter should use the return value of [`Self::handle_custom_message`].
+	#[cfg(not(c_bindings))]
 	fn release_pending_custom_messages(&self) -> Vec<PendingOnionMessage<Self::CustomMessage>>;
+
+	/// Releases any [`Self::CustomMessage`]s that need to be sent.
+	///
+	/// Typically, this is used for messages initiating a message flow rather than in response to
+	/// another message. The latter should use the return value of [`Self::handle_custom_message`].
+	#[cfg(c_bindings)]
+	fn release_pending_custom_messages(&self) -> Vec<(Self::CustomMessage, Destination, Option<BlindedPath>)>;
 }
 
 /// A processed incoming onion message, containing either a Forward (another onion message)
@@ -685,7 +711,10 @@ where
 	fn next_onion_message_for_peer(&self, peer_node_id: PublicKey) -> Option<OnionMessage> {
 		// Enqueue any initiating `OffersMessage`s to send.
 		for message in self.offers_handler.release_pending_messages() {
+			#[cfg(not(c_bindings))]
 			let PendingOnionMessage { contents, destination, reply_path } = message;
+			#[cfg(c_bindings)]
+			let (contents, destination, reply_path) = message;
 			self.find_path_and_enqueue_onion_message(
 				contents, destination, reply_path, format_args!("when sending OffersMessage")
 			);
@@ -693,7 +722,10 @@ where
 
 		// Enqueue any initiating `CustomMessage`s to send.
 		for message in self.custom_handler.release_pending_custom_messages() {
+			#[cfg(not(c_bindings))]
 			let PendingOnionMessage { contents, destination, reply_path } = message;
+			#[cfg(c_bindings)]
+			let (contents, destination, reply_path) = message;
 			self.find_path_and_enqueue_onion_message(
 				contents, destination, reply_path, format_args!("when sending CustomMessage")
 			);
@@ -712,10 +744,11 @@ where
 /// Useful for simplifying the parameters of [`SimpleArcChannelManager`] and
 /// [`SimpleArcPeerManager`]. See their docs for more details.
 ///
-/// This is not exported to bindings users as `Arc`s don't make sense in bindings.
+/// This is not exported to bindings users as type aliases aren't supported in most languages.
 ///
 /// [`SimpleArcChannelManager`]: crate::ln::channelmanager::SimpleArcChannelManager
 /// [`SimpleArcPeerManager`]: crate::ln::peer_handler::SimpleArcPeerManager
+#[cfg(not(c_bindings))]
 pub type SimpleArcOnionMessenger<M, T, F, L> = OnionMessenger<
 	Arc<KeysManager>,
 	Arc<KeysManager>,
@@ -728,10 +761,11 @@ pub type SimpleArcOnionMessenger<M, T, F, L> = OnionMessenger<
 /// Useful for simplifying the parameters of [`SimpleRefChannelManager`] and
 /// [`SimpleRefPeerManager`]. See their docs for more details.
 ///
-/// This is not exported to bindings users as general type aliases don't make sense in bindings.
+/// This is not exported to bindings users as type aliases aren't supported in most languages.
 ///
 /// [`SimpleRefChannelManager`]: crate::ln::channelmanager::SimpleRefChannelManager
 /// [`SimpleRefPeerManager`]: crate::ln::peer_handler::SimpleRefPeerManager
+#[cfg(not(c_bindings))]
 pub type SimpleRefOnionMessenger<
 	'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, M, T, F, L
 > = OnionMessenger<

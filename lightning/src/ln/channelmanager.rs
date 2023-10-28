@@ -63,7 +63,7 @@ use crate::offers::merkle::SignError;
 use crate::offers::offer::{DerivedMetadata, Offer, OfferBuilder};
 use crate::offers::parse::Bolt12SemanticError;
 use crate::offers::refund::{Refund, RefundBuilder};
-use crate::onion_message::{Destination, OffersMessage, OffersMessageHandler, PendingOnionMessage};
+use crate::onion_message::{Destination, OffersMessage, OffersMessageHandler, PendingOnionMessage, new_pending_onion_message};
 use crate::sign::{EntropySource, KeysManager, NodeSigner, Recipient, SignerProvider, WriteableEcdsaChannelSigner};
 use crate::util::config::{UserConfig, ChannelConfig, ChannelConfigUpdate};
 use crate::util::wakers::{Future, Notifier};
@@ -827,7 +827,8 @@ struct PendingInboundPayment {
 /// or, respectively, [`Router`] for its router, but this type alias chooses the concrete types
 /// of [`KeysManager`] and [`DefaultRouter`].
 ///
-/// This is not exported to bindings users as Arcs don't make sense in bindings
+/// This is not exported to bindings users as type aliases aren't supported in most languages.
+#[cfg(not(c_bindings))]
 pub type SimpleArcChannelManager<M, T, F, L> = ChannelManager<
 	Arc<M>,
 	Arc<T>,
@@ -855,7 +856,8 @@ pub type SimpleArcChannelManager<M, T, F, L> = ChannelManager<
 /// or, respectively, [`Router`]  for its router, but this type alias chooses the concrete types
 /// of [`KeysManager`] and [`DefaultRouter`].
 ///
-/// This is not exported to bindings users as Arcs don't make sense in bindings
+/// This is not exported to bindings users as type aliases aren't supported in most languages.
+#[cfg(not(c_bindings))]
 pub type SimpleRefChannelManager<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, M, T, F, L> =
 	ChannelManager<
 		&'a M,
@@ -7329,6 +7331,8 @@ where
 	/// Requires a direct connection to the introduction node in the responding [`InvoiceRequest`]'s
 	/// reply path.
 	///
+	/// This is not exported to bindings users as builder patterns don't map outside of move semantics.
+	///
 	/// [`Offer`]: crate::offers::offer::Offer
 	/// [`InvoiceRequest`]: crate::offers::invoice_request::InvoiceRequest
 	pub fn create_offer_builder(
@@ -7362,6 +7366,9 @@ where
 	/// invoice. If abandoned, or an invoice isn't received before expiration, the payment will fail
 	/// with an [`Event::InvoiceRequestFailed`].
 	///
+	/// If `max_total_routing_fee_msat` is not specified, The default from
+	/// [`RouteParameters::from_payment_params_and_value`] is applied.
+	///
 	/// # Privacy
 	///
 	/// Uses a one-hop [`BlindedPath`] for the refund with [`ChannelManager::get_our_node_id`] as
@@ -7378,6 +7385,8 @@ where
 	///
 	/// Errors if a duplicate `payment_id` is provided given the caveats in the aforementioned link
 	/// or if `amount_msats` is invalid.
+	///
+	/// This is not exported to bindings users as builder patterns don't map outside of move semantics.
 	///
 	/// [`Refund`]: crate::offers::refund::Refund
 	/// [`Bolt12Invoice`]: crate::offers::invoice::Bolt12Invoice
@@ -7420,6 +7429,9 @@ where
 	///   [`Offer::expects_quantity`] is `true`.
 	/// - `amount_msats` if overpaying what is required for the given `quantity` is desired, and
 	/// - `payer_note` for [`InvoiceRequest::payer_note`].
+	///
+	/// If `max_total_routing_fee_msat` is not specified, The default from
+	/// [`RouteParameters::from_payment_params_and_value`] is applied.
 	///
 	/// # Payment
 	///
@@ -7493,11 +7505,11 @@ where
 
 		let mut pending_offers_messages = self.pending_offers_messages.lock().unwrap();
 		if offer.paths().is_empty() {
-			let message = PendingOnionMessage {
-				contents: OffersMessage::InvoiceRequest(invoice_request),
-				destination: Destination::Node(offer.signing_pubkey()),
-				reply_path: Some(reply_path),
-			};
+			let message = new_pending_onion_message(
+				OffersMessage::InvoiceRequest(invoice_request),
+				Destination::Node(offer.signing_pubkey()),
+				Some(reply_path),
+			);
 			pending_offers_messages.push(message);
 		} else {
 			// Send as many invoice requests as there are paths in the offer (with an upper bound).
@@ -7505,11 +7517,11 @@ where
 			// one invoice for a given payment id will be paid, even if more than one is received.
 			const REQUEST_LIMIT: usize = 10;
 			for path in offer.paths().into_iter().take(REQUEST_LIMIT) {
-				let message = PendingOnionMessage {
-					contents: OffersMessage::InvoiceRequest(invoice_request.clone()),
-					destination: Destination::BlindedPath(path.clone()),
-					reply_path: Some(reply_path.clone()),
-				};
+				let message = new_pending_onion_message(
+					OffersMessage::InvoiceRequest(invoice_request.clone()),
+					Destination::BlindedPath(path.clone()),
+					Some(reply_path.clone()),
+				);
 				pending_offers_messages.push(message);
 			}
 		}
@@ -7562,19 +7574,19 @@ where
 
 				let mut pending_offers_messages = self.pending_offers_messages.lock().unwrap();
 				if refund.paths().is_empty() {
-					let message = PendingOnionMessage {
-						contents: OffersMessage::Invoice(invoice),
-						destination: Destination::Node(refund.payer_id()),
-						reply_path: Some(reply_path),
-					};
+					let message = new_pending_onion_message(
+						OffersMessage::Invoice(invoice),
+						Destination::Node(refund.payer_id()),
+						Some(reply_path),
+					);
 					pending_offers_messages.push(message);
 				} else {
 					for path in refund.paths() {
-						let message = PendingOnionMessage {
-							contents: OffersMessage::Invoice(invoice.clone()),
-							destination: Destination::BlindedPath(path.clone()),
-							reply_path: Some(reply_path.clone()),
-						};
+						let message = new_pending_onion_message(
+							OffersMessage::Invoice(invoice.clone()),
+							Destination::BlindedPath(path.clone()),
+							Some(reply_path.clone()),
+						);
 						pending_offers_messages.push(message);
 					}
 				}
@@ -8961,10 +8973,10 @@ where
 								match invoice.sign(|invoice| self.node_signer.sign_bolt12_invoice(invoice)) {
 									Ok(invoice) => Ok(OffersMessage::Invoice(invoice)),
 									Err(SignError::Signing(())) => Err(OffersMessage::InvoiceError(
-											InvoiceError::from_str("Failed signing invoice")
+											InvoiceError::from_string("Failed signing invoice".to_string())
 									)),
 									Err(SignError::Verification(_)) => Err(OffersMessage::InvoiceError(
-											InvoiceError::from_str("Failed invoice signature verification")
+											InvoiceError::from_string("Failed invoice signature verification".to_string())
 									)),
 								});
 						match response {
@@ -8980,7 +8992,7 @@ where
 			OffersMessage::Invoice(invoice) => {
 				match invoice.verify(expanded_key, secp_ctx) {
 					Err(()) => {
-						Some(OffersMessage::InvoiceError(InvoiceError::from_str("Unrecognized invoice")))
+						Some(OffersMessage::InvoiceError(InvoiceError::from_string("Unrecognized invoice".to_owned())))
 					},
 					Ok(_) if invoice.invoice_features().requires_unknown_bits_from(&self.bolt12_invoice_features()) => {
 						Some(OffersMessage::InvoiceError(Bolt12SemanticError::UnknownRequiredFeatures.into()))
@@ -8988,7 +9000,7 @@ where
 					Ok(payment_id) => {
 						if let Err(e) = self.send_payment_for_bolt12_invoice(&invoice, payment_id) {
 							log_trace!(self.logger, "Failed paying invoice: {:?}", e);
-							Some(OffersMessage::InvoiceError(InvoiceError::from_str(&format!("{:?}", e))))
+							Some(OffersMessage::InvoiceError(InvoiceError::from_string(format!("{:?}", e))))
 						} else {
 							None
 						}
