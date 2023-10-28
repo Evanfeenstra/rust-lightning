@@ -938,71 +938,72 @@ pub(crate) fn decode_next_payment_hop<NS: Deref>(
 /// Build a payment onion, returning the first hop msat and cltv values as well.
 pub fn create_payment_onion<T>(
 	secp_ctx: &Secp256k1<T>, path: &Path, session_priv: &SecretKey, total_msat: u64, 
-	recipient_onion: RecipientOnionFields, starting_htlc_offset: u32, payment_hash: PaymentHash,
-	keysend_preimage: Option<PaymentPreimage>, prng_seed: [u8; 32]) -> Result<(u64, u32, msgs::OnionPacket), ()>
+	recipient_onion: RecipientOnionFields, best_block_height: u32, payment_hash: PaymentHash,
+	keysend_preimage: Option<PaymentPreimage>, prng_seed: [u8; 32]
+) -> Result<(u64, u32, msgs::OnionPacket), ()>
 where
 	T: secp256k1::Signing
 {
 	let onion_keys = construct_onion_keys(&secp_ctx, &path, &session_priv).map_err(|_| ())?;
 	let (onion_payloads, htlc_msat, htlc_cltv) = build_onion_payloads(
-        &path,
-        total_msat,
-        recipient_onion,
-        starting_htlc_offset,
-        &keysend_preimage,
-    ).map_err(|_| ())?;
-	let onion_packet = construct_onion_packet(onion_payloads, onion_keys, prng_seed, &payment_hash)?;
+		&path,
+		total_msat,
+		recipient_onion,
+		best_block_height + 1,
+		&keysend_preimage,
+	).map_err(|_| ())?;
+	let onion_packet = construct_onion_packet(
+		onion_payloads, onion_keys, prng_seed, &payment_hash
+	)?;
 	Ok((htlc_msat, htlc_cltv, onion_packet))
 }
 
-/// Forwarded Payment, including next hop details
-#[derive(Debug)]
+/// Forwarded Payment, including next hop details.
 pub struct ForwardedPayment {
-	/// short channel id of the next hop
+	/// Short channel id of the next hop.
 	pub short_channel_id: u64,
 	/// The value, in msat, of the payment after this hop's fee is deducted.
 	pub amt_to_forward: u64,
-	/// outgoing CLTV for the next hop
+	/// Outgoing CLTV for the next hop.
 	pub outgoing_cltv_value: u32,
-	/// onion packet for the next hop
+	/// Onion packet for the next hop.
 	pub onion_packet: msgs::OnionPacket,
 }
 
-/// Received payment, of either regular or blinded type
-#[derive(Debug)]
+/// Received payment, of either regular or blinded type.
 pub enum ReceivedPayment {
-	/// Regular (unblinded) payment
-	Regular {
-		/// payment_secret to authenticate sender to the receiver
+	/// Regular (unblinded) payment.
+	Unblinded {
+		/// Payment_secret to authenticate sender to the receiver.
 		payment_secret: Option<[u8; 32]>,
-		/// The total value, in msat, of the payment as received by the ultimate recipient
+		/// The total value, in msat, of the payment as received by the ultimate recipient.
 		total_msat: Option<u64>,
-		/// custom payment metadata included in the payment
+		/// Custom payment metadata included in the payment.
 		payment_metadata: Option<Vec<u8>>,
-		/// preimage used in spontaneous payment
+		/// Preimage used in spontaneous payment.
 		keysend_preimage: Option<[u8; 32]>,
-		/// custom TLV records included in the payment
+		/// Custom TLV records included in the payment.
 		custom_tlvs: Vec<(u64, Vec<u8>)>,
-		/// amount received
+		/// Amount received.
 		amt_msat: u64,
-		/// outgoing ctlv
-		outgoing_cltv_value: u32,
+		/// CLTV expiration.
+		cltv_expiry: u32,
 	},
 	/// Blinded payment
 	Blinded {
-		/// amount received
+		/// Amount received.
 		amt_msat: u64,
-		/// amount received plus fees paid
+		/// Amount received plus fees paid.
 		total_msat: u64,
-		/// outgoing cltv
-		outgoing_cltv_value: u32,
-		/// Payment secret 
+		/// CLTV expiration.
+		cltv_expiry: u32,
+		/// Payment secret.
 		payment_secret: [u8; 32],
-		/// The maximum total CLTV that is acceptable when relaying a payment over this hop
+		/// The maximum total CLTV that is acceptable when relaying a payment over this hop.
 		max_cltv_expiry: u32,
-		/// The minimum value, in msat, that may be accepted by the node corresponding to this hop
+		/// The minimum value, in msat, that may be accepted by the node corresponding to this hop.
 		htlc_minimum_msat: u64,
-		/// Blinding point from intro node
+		/// Blinding point from intro node.
 		intro_node_blinding_point: PublicKey,
 	}
 }
@@ -1011,29 +1012,42 @@ impl std::convert::TryFrom<msgs::InboundOnionPayload> for ReceivedPayment {
     type Error = ();
     fn try_from(pld: msgs::InboundOnionPayload) -> Result<Self, Self::Error> {
 		match pld {
-			msgs::InboundOnionPayload::Forward { short_channel_id: _, amt_to_forward: _, outgoing_cltv_value: _ } => {
+			msgs::InboundOnionPayload::Forward {
+				short_channel_id: _, amt_to_forward: _, outgoing_cltv_value: _
+			} => {
 				Err(())
 			},
-			msgs::InboundOnionPayload::Receive { payment_data, payment_metadata, keysend_preimage, custom_tlvs, amt_msat, outgoing_cltv_value } => {
+			msgs::InboundOnionPayload::Receive {
+				payment_data, payment_metadata, keysend_preimage, custom_tlvs, amt_msat,
+				outgoing_cltv_value
+			} => {
 				let (payment_secret, total_msat) = match payment_data {
 					Some(p) => (Some(p.payment_secret.0), Some(p.total_msat)),
 					None => (None, None),
 				};
 				let keysend_preimage = keysend_preimage.map(|p| p.0);
-				Ok(Self::Regular { payment_secret, total_msat, payment_metadata, keysend_preimage, custom_tlvs, amt_msat, outgoing_cltv_value })
+				Ok(Self::Unblinded {
+					payment_secret, total_msat, payment_metadata, keysend_preimage, custom_tlvs,
+					amt_msat, cltv_expiry: outgoing_cltv_value
+				})
 			},
-			msgs::InboundOnionPayload::BlindedReceive { amt_msat, total_msat, outgoing_cltv_value, payment_secret, payment_constraints, intro_node_blinding_point } => {
+			msgs::InboundOnionPayload::BlindedReceive {
+				amt_msat, total_msat, outgoing_cltv_value, payment_secret, payment_constraints,
+				intro_node_blinding_point
+			} => {
 				let payment_secret = payment_secret.0;
 				let max_cltv_expiry = payment_constraints.max_cltv_expiry;
 				let htlc_minimum_msat = payment_constraints.htlc_minimum_msat;
-				Ok(Self::Blinded { amt_msat, total_msat, outgoing_cltv_value, payment_secret, max_cltv_expiry, htlc_minimum_msat, intro_node_blinding_point })
+				Ok(Self::Blinded {
+					amt_msat, total_msat, cltv_expiry: outgoing_cltv_value, payment_secret,
+					max_cltv_expiry, htlc_minimum_msat, intro_node_blinding_point
+				})
 			}
 		}
     }
 }
 
 /// Received and decrypted onion payment, either of type Receive (for us), or Forward.
-#[derive(Debug)]
 pub enum PeeledPayment {
 	/// This onion payload was for us, not for forwarding to a next-hop.
 	Receive(ReceivedPayment),
@@ -1058,12 +1072,18 @@ where
 		.unwrap()
 		.secret_bytes();
 
-	let hop = decode_next_payment_hop(shared_secret, &onion.hop_data[..], onion.hmac, payment_hash, node_signer).map_err(|_| ())?;
+	let hop = decode_next_payment_hop(
+		shared_secret, &onion.hop_data[..], onion.hmac, payment_hash, node_signer
+	).map_err(|_| ())?;
 	let peeled = match hop {
 		Hop::Forward { next_hop_data, next_hop_hmac, new_packet_bytes } => {
-			if let msgs::InboundOnionPayload::Forward{short_channel_id, amt_to_forward, outgoing_cltv_value} = next_hop_data {
+			if let msgs::InboundOnionPayload::Forward{
+				short_channel_id, amt_to_forward, outgoing_cltv_value
+			} = next_hop_data {
 
-				let next_packet_pk = next_hop_pubkey(secp_ctx, onion.public_key.unwrap(), &shared_secret);
+				let next_packet_pk = next_hop_pubkey(
+					secp_ctx, onion.public_key.unwrap(), &shared_secret
+				);
 
 				let onion_packet = msgs::OnionPacket {
 					version: 0,
@@ -1173,7 +1193,8 @@ fn decode_next_hop<T, R: ReadableArgs<T>, N: NextPacketBytes>(shared_secret: [u8
 #[cfg(test)]
 mod tests {
 	use crate::io;
-	use crate::prelude::*;
+	use crate::ln::{PaymentPreimage, PaymentSecret};
+use crate::prelude::*;
 	use crate::ln::PaymentHash;
 	use crate::ln::features::{ChannelFeatures, NodeFeatures};
 	use crate::routing::router::{Path, Route, RouteHop};
@@ -1390,20 +1411,23 @@ mod tests {
 		}
 	}
 
-	#[test]
-	fn create_and_peel_payment_onion() {
-		use crate::ln::channelmanager::RecipientOnionFields;
-		use crate::ln::PaymentPreimage;
-		use std::convert::TryInto;
-		use super::{create_payment_onion, peel_payment_onion};
-		use super::{Sha256, Hash, PeeledPayment, ReceivedPayment};
+	use crate::ln::channelmanager::RecipientOnionFields;
+	use super::{create_payment_onion, peel_payment_onion};
+	use super::{PeeledPayment, ReceivedPayment};
 
-		let secp_ctx = Secp256k1::new();
-		let recipient_onion = RecipientOnionFields::spontaneous_empty();
+	fn payment_onion_args(hop_pk: PublicKey, recipient_pk: PublicKey) -> (
+		SecretKey, u64, u32, RecipientOnionFields, PaymentPreimage, PaymentHash, [u8; 32],
+		Vec<RouteHop>, u64, PaymentSecret,
+	) {
+		use std::convert::TryInto;
+		use super::{Sha256, Hash};
+
 		let session_priv_bytes = [42; 32];
 		let session_priv = SecretKey::from_slice(&session_priv_bytes).unwrap();
-		let amt_msat = 1000;
+		let total_amt_msat = 1000;
 		let cur_height = 1000;
+		let pay_secret = PaymentSecret([99; 32]);
+		let recipient_onion = RecipientOnionFields::secret_only(pay_secret);
 		let preimage_bytes = [43; 32];
 		let preimage = PaymentPreimage(preimage_bytes);
 		let rhash = Sha256::hash(&preimage_bytes).to_vec();
@@ -1411,19 +1435,13 @@ mod tests {
 		let payment_hash = PaymentHash(rhash_bytes);
 		let prng_seed = [44; 32];
 
-		// let alice = make_keys_manager(&[1; 32]);
-		let bob = make_keys_manager(&[2; 32]);
-		let bob_pk = PublicKey::from_secret_key(&secp_ctx, &bob.get_node_secret_key());
-		let charlie = make_keys_manager(&[3; 32]);
-		let charlie_pk = PublicKey::from_secret_key(&secp_ctx, &charlie.get_node_secret_key());
-
 		// make a route alice -> bob -> charlie
-		let bob_fee = 1;
-		let recipient_amount = 999;
+		let hop_fee = 1;
+		let recipient_amount = total_amt_msat - hop_fee;
 		let hops = vec![
 			RouteHop {
-				pubkey: bob_pk,
-				fee_msat: bob_fee,
+				pubkey: hop_pk,
+				fee_msat: hop_fee,
 				cltv_expiry_delta: 0,
 				short_channel_id: 1,
 				node_features: NodeFeatures::empty(),
@@ -1431,7 +1449,7 @@ mod tests {
 				maybe_announced_channel: false,
 			},
 			RouteHop {
-				pubkey: charlie_pk,
+				pubkey: recipient_pk,
 				fee_msat: recipient_amount,
 				cltv_expiry_delta: 0,
 				short_channel_id: 2,
@@ -1440,51 +1458,70 @@ mod tests {
 				maybe_announced_channel: false,
 			}
 		];
+
+		(session_priv, total_amt_msat, cur_height, recipient_onion, preimage, payment_hash,
+			prng_seed, hops, recipient_amount, pay_secret)
+	}
+
+	#[test]
+	fn create_and_peel_unblinded_payment() {
+		let secp_ctx = Secp256k1::new();
+
+		// let alice = make_keys_manager(&[1; 32]);
+		let bob = make_keys_manager(&[2; 32]);
+		let bob_pk = PublicKey::from_secret_key(&secp_ctx, &bob.get_node_secret_key());
+		let charlie = make_keys_manager(&[3; 32]);
+		let charlie_pk = PublicKey::from_secret_key(&secp_ctx, &charlie.get_node_secret_key());
+		
+		let (session_priv, total_amt_msat, cur_height, recipient_onion, preimage, payment_hash, 
+			prng_seed, hops, recipient_amount, pay_secret) = payment_onion_args(bob_pk, charlie_pk);
+
 		let path = Path {
 			hops: hops,
 			blinded_tail: None,
 		};
 
 		let (_htlc_msat, _htlc_cltv, onion) = create_payment_onion(
-			&secp_ctx, &path, &session_priv, amt_msat, recipient_onion, cur_height, payment_hash, 
-			Some(preimage), prng_seed
+			&secp_ctx, &path, &session_priv, total_amt_msat, recipient_onion, cur_height,
+			payment_hash, Some(preimage), prng_seed
 		).unwrap();
 
 		// bob peels to find another onion
-		let next_onion = match peel_payment_onion(&onion, payment_hash, &&bob, &secp_ctx).unwrap() {
-			PeeledPayment::Receive(_) => {
-				panic!("should not be a receive");
-			},
-			PeeledPayment::Forward(forwarded) => {
-				forwarded.onion_packet
-			},
-		};
+		let next_onion = peel_payment_onion(&onion, payment_hash, &&bob, &secp_ctx).unwrap();
+		assert!(matches!(next_onion, PeeledPayment::Forward(_)));
 
-		// charlie peels to find a received payment
-		match peel_payment_onion(&next_onion, payment_hash, &&charlie, &secp_ctx).unwrap() {
-			PeeledPayment::Receive(received) => match received {
-				ReceivedPayment::Regular{amt_msat, keysend_preimage, ..} => {
-					assert_eq!(amt_msat, recipient_amount, "wrong received amount");
-					assert_eq!(Some(preimage_bytes), keysend_preimage, "wrong received preimage");
-				},
-				ReceivedPayment::Blinded{..} => {
-					panic!("should not be blinded");
-				}
-			},
-			PeeledPayment::Forward(_) => {
-				panic!("should not be a receive");
-			},
-		};
+		if let PeeledPayment::Forward(forwarded) = next_onion {
 
+			// charlie peels to find a received payment
+			let recvd = peel_payment_onion(
+				&forwarded.onion_packet, payment_hash, &&charlie, &secp_ctx
+			).unwrap();
+			assert!(matches!(recvd, PeeledPayment::Receive(_)));
+
+				if let PeeledPayment::Receive(received) = recvd {
+					assert!(matches!(received, ReceivedPayment::Unblinded{..}));
+
+					if let ReceivedPayment::Unblinded{
+						amt_msat, keysend_preimage, payment_secret, total_msat, payment_metadata,
+						custom_tlvs, cltv_expiry
+					} = received {
+						assert_eq!(amt_msat, recipient_amount);
+						assert_eq!(keysend_preimage, Some(preimage.0));
+						assert_eq!(payment_secret, Some(pay_secret.0));
+						assert_eq!(total_msat, Some(total_amt_msat));
+						assert_eq!(payment_metadata, None);
+						assert_eq!(custom_tlvs, Vec::new());
+						assert_eq!(cltv_expiry, cur_height + 1);
+					}				
+			};
+		}
 	}
 
 	fn make_keys_manager(seed: &[u8; 32]) -> crate::sign::KeysManager {
 		use crate::sign::KeysManager;
 		use std::time::{SystemTime, UNIX_EPOCH};
 		let start = SystemTime::now();
-		let now = start
-			.duration_since(UNIX_EPOCH)
-			.expect("Time went backwards");
+		let now = start.duration_since(UNIX_EPOCH).expect("Time went backwards");
 		KeysManager::new(seed, now.as_secs(), now.subsec_nanos())
 	}
 

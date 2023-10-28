@@ -20,7 +20,6 @@ pub mod ser;
 pub mod message_signing;
 pub mod invoice;
 pub mod persist;
-pub mod scid_utils;
 pub mod string;
 pub mod wakers;
 #[cfg(fuzzing)]
@@ -35,6 +34,7 @@ pub(crate) mod chacha20;
 pub(crate) mod poly1305;
 pub(crate) mod chacha20poly1305rfc;
 pub(crate) mod transaction_utils;
+pub(crate) mod scid_utils;
 pub(crate) mod time;
 
 pub mod indexed_map;
