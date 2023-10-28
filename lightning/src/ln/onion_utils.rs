@@ -1487,34 +1487,35 @@ use crate::prelude::*;
 		).unwrap();
 
 		// bob peels to find another onion
-		let next_onion = peel_payment_onion(&onion, payment_hash, &&bob, &secp_ctx).unwrap();
-		assert!(matches!(next_onion, PeeledPayment::Forward(_)));
+		let next_onion = match peel_payment_onion(&onion, payment_hash, &&bob, &secp_ctx).unwrap() {
+			PeeledPayment::Receive(_) => panic!("should not be Receive"),
+			PeeledPayment::Forward(forwarded) => forwarded.onion_packet,
+		};
 
-		if let PeeledPayment::Forward(forwarded) = next_onion {
+		// charlie peels to find a received payment
+		let received = match peel_payment_onion(
+			&next_onion, payment_hash, &&charlie, &secp_ctx
+		).unwrap() {
+			PeeledPayment::Receive(received) => received,
+			PeeledPayment::Forward(_) => panic!("should not be a Forward"),
+		};
 
-			// charlie peels to find a received payment
-			let recvd = peel_payment_onion(
-				&forwarded.onion_packet, payment_hash, &&charlie, &secp_ctx
-			).unwrap();
-			assert!(matches!(recvd, PeeledPayment::Receive(_)));
-
-				if let PeeledPayment::Receive(received) = recvd {
-					assert!(matches!(received, ReceivedPayment::Unblinded{..}));
-
-					if let ReceivedPayment::Unblinded{
-						amt_msat, keysend_preimage, payment_secret, total_msat, payment_metadata,
-						custom_tlvs, cltv_expiry
-					} = received {
-						assert_eq!(amt_msat, recipient_amount);
-						assert_eq!(keysend_preimage, Some(preimage.0));
-						assert_eq!(payment_secret, Some(pay_secret.0));
-						assert_eq!(total_msat, Some(total_amt_msat));
-						assert_eq!(payment_metadata, None);
-						assert_eq!(custom_tlvs, Vec::new());
-						assert_eq!(cltv_expiry, cur_height + 1);
-					}				
-			};
+		match received {
+			ReceivedPayment::Unblinded{
+				amt_msat, keysend_preimage, payment_secret, total_msat, payment_metadata,
+				custom_tlvs, cltv_expiry
+			} => {
+				assert_eq!(amt_msat, recipient_amount);
+				assert_eq!(keysend_preimage, Some(preimage.0));
+				assert_eq!(payment_secret, Some(pay_secret.0));
+				assert_eq!(total_msat, Some(total_amt_msat));
+				assert_eq!(payment_metadata, None);
+				assert_eq!(custom_tlvs, Vec::new());
+				assert_eq!(cltv_expiry, cur_height + 1);
+			},
+			ReceivedPayment::Blinded { .. } => panic!("Should not be Blinded"),
 		}
+
 	}
 
 	fn make_keys_manager(seed: &[u8; 32]) -> crate::sign::KeysManager {
