@@ -7,6 +7,8 @@
 // You may not use this file except in accordance with one or both of these
 // licenses.
 
+//! Utils for creating/parsing SCIDs
+
 /// Maximum block height that can be used in a `short_channel_id`. This
 /// value is based on the 3-bytes available for block height.
 pub const MAX_SCID_BLOCK: u64 = 0x00ffffff;
@@ -22,8 +24,11 @@ pub const MAX_SCID_VOUT_INDEX: u64 = 0xffff;
 /// A `short_channel_id` construction error
 #[derive(Debug, PartialEq, Eq)]
 pub enum ShortChannelIdError {
+	/// Block too high
 	BlockOverflow,
+	/// TX index too high
 	TxIndexOverflow,
+	/// Vout index too high
 	VoutIndexOverflow,
 }
 
@@ -65,7 +70,7 @@ pub fn scid_from_parts(block: u64, tx_index: u64, vout_index: u64) -> Result<u64
 /// 2) phantom node payments, to get an scid for the phantom node's phantom channel
 /// 3) payments intended to be intercepted will route using a fake scid (this is typically used so
 ///    the forwarding node can open a JIT channel to the next hop)
-pub(crate) mod fake_scid {
+pub mod fake_scid {
 	use bitcoin::blockdata::constants::ChainHash;
 	use bitcoin::network::constants::Network;
 	use crate::sign::EntropySource;
@@ -90,9 +95,12 @@ pub(crate) mod fake_scid {
 	/// receipt, and handle the HTLC accordingly. The namespace identifier is encrypted when encoded
 	/// into the fake scid.
 	#[derive(Copy, Clone)]
-	pub(crate) enum Namespace {
+	pub enum Namespace {
+		/// Phantom
 		Phantom,
+		/// OutboundAlias
 		OutboundAlias,
+		/// Intercept
 		Intercept
 	}
 
@@ -101,7 +109,7 @@ pub(crate) mod fake_scid {
 		/// between segwit activation and the current best known height, and the tx index and output
 		/// index are also selected from a "reasonable" range. We add this logic because it makes it
 		/// non-obvious at a glance that the scid is fake, e.g. if it appears in invoice route hints.
-		pub(crate) fn get_fake_scid<ES: Deref>(&self, highest_seen_blockheight: u32, chain_hash: &ChainHash, fake_scid_rand_bytes: &[u8; 32], entropy_source: &ES) -> u64
+		pub fn get_fake_scid<ES: Deref>(&self, highest_seen_blockheight: u32, chain_hash: &ChainHash, fake_scid_rand_bytes: &[u8; 32], entropy_source: &ES) -> u64
 			where ES::Target: EntropySource,
 		{
 			// Ensure we haven't created a namespace that doesn't fit into the 3 bits we've allocated for
