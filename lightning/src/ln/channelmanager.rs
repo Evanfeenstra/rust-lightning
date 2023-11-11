@@ -2925,23 +2925,44 @@ where
 	) -> Result<
 		(onion_utils::Hop, [u8; 32], Option<Result<PublicKey, secp256k1::Error>>), HTLCFailureMsg
 	> {
-		let (next_hop, shared_secret, next_packet_details_opt) = decode_incoming_update_add_htlc_onion(
-			msg, &self.node_signer, &self.logger, &self.secp_ctx
-		)?;
-
 		macro_rules! return_err {
-			($msg: expr, $err_code: expr, $data: expr) => {
+			($msg: expr, $err_code: expr, $data: expr, $shared_secret: expr) => {
 				{
 					log_info!(self.logger, "Failed to accept/forward incoming HTLC: {}", $msg);
 					return Err(HTLCFailureMsg::Relay(msgs::UpdateFailHTLC {
 						channel_id: msg.channel_id,
 						htlc_id: msg.htlc_id,
 						reason: HTLCFailReason::reason($err_code, $data.to_vec())
-							.get_encrypted_failure_packet(&shared_secret, &None),
+							.get_encrypted_failure_packet($shared_secret, &None),
 					}));
 				}
 			}
 		}
+		macro_rules! return_malformed_err {
+			($msg: expr, $err_code: expr) => {
+				{
+					log_info!(self.logger, "Failed to accept/forward incoming HTLC: {}", $msg);
+					return Err(HTLCFailureMsg::Malformed(msgs::UpdateFailMalformedHTLC {
+						channel_id: msg.channel_id,
+						htlc_id: msg.htlc_id,
+						sha256_of_onion: Sha256::hash(&msg.onion_routing_packet.hop_data).into_inner(),
+						failure_code: $err_code,
+					}));
+				}
+			}
+		}
+
+		let (next_hop, shared_secret, next_packet_details_opt) = match decode_incoming_update_add_htlc_onion(
+			msg, &self.node_signer, &self.secp_ctx
+		) {
+			Ok(res) => res,
+			Err(PeelOnionError::FailMalformed { err_msg, err_code }) => {
+				return_malformed_err!(err_msg, err_code);
+			},
+			Err(PeelOnionError::Fail { err_msg, err_code, shared_secret }) => {
+				return_err!(err_msg, err_code, &[0; 0], &shared_secret);
+			},
+		};
 
 		let NextPacketDetails {
 			next_packet_pubkey, outgoing_amt_msat, outgoing_scid, outgoing_cltv_value
@@ -3068,7 +3089,7 @@ where
 				// instead.
 				code = 0x2000 | 2;
 			}
-			return_err!(err, code, &res.0[..]);
+			return_err!(err, code, &res.0[..], &shared_secret);
 		}
 		Ok((next_hop, shared_secret, Some(next_packet_pubkey)))
 	}
@@ -7861,29 +7882,55 @@ fn create_recv_pending_htlc_info(
 	})
 }
 
+/// Error returned when we fail to peel a layer off a payment onion.
+#[derive(Debug)]
+pub enum PeelOnionError {
+	/// We failed to decode the onion payload.
+	Fail {
+		/// Message text of the error.
+		err_msg: &'static str,
+		/// BOLT 4 error code.
+		err_code: u16,
+		/// Shared secret to encrypt the failure reason back to the peer.
+		shared_secret: [u8; 32]
+	},
+	/// The onion payload was malformed or otherwise invalid.
+	FailMalformed {
+		/// Message text of the error.
+		err_msg: &'static str,
+		/// BOLT 4 error code.
+		err_code: u16,
+	},
+}
+
+impl PeelOnionError {
+	fn from_onion_decode_err(ide: onion_utils::OnionDecodeErr, shared_secret: [u8; 32]) -> Self {
+		match ide {
+			onion_utils::OnionDecodeErr::Relay { err_msg, err_code } => Self::Fail {
+				err_msg, err_code, shared_secret
+			},
+			onion_utils::OnionDecodeErr::Malformed { err_msg, err_code } => Self::FailMalformed {
+				err_msg, err_code
+			},
+		}
+	}
+}
+
 /// Peel one layer off an incoming onion, returning [`PendingHTLCInfo`] (either Forward or Receive).
 /// This does all the relevant context-free checks that LDK requires for payment relay or
 /// acceptance. If the payment is to be received, and the amount matches the expected amount for
 /// a given invoice, this indicates the [`msgs::UpdateAddHTLC`], once fully committed in the
 /// channel, will generate an [`Event::PaymentClaimable`].
-pub fn peel_payment_onion<NS: Deref, L: Deref, T: secp256k1::Verification>(
-	msg: &msgs::UpdateAddHTLC, node_signer: &NS, logger: &L, secp_ctx: &Secp256k1<T>,
-	cur_height: u32, accept_mpp_keysend: bool,
-) -> Result<PendingHTLCInfo, InboundOnionErr>
+pub fn peel_payment_onion<NS: Deref, T: secp256k1::Verification>(
+	msg: &msgs::UpdateAddHTLC, node_signer: &NS, secp_ctx: &Secp256k1<T>, cur_height: u32,
+	accept_mpp_keysend: bool,
+) -> Result<PendingHTLCInfo, PeelOnionError>
 where
 	NS::Target: NodeSigner,
-	L::Target: Logger,
 {
 	let (hop, shared_secret, next_packet_details_opt) =
-		decode_incoming_update_add_htlc_onion(msg, node_signer, logger, secp_ctx
-	).map_err(|e| {
-		let (err_code, err_data) = match e {
-			HTLCFailureMsg::Malformed(m) => (m.failure_code, Vec::new()),
-			HTLCFailureMsg::Relay(r) => (0x4000 | 22, r.reason.data),
-		};
-		let msg = "Failed to decode update add htlc onion";
-		InboundOnionErr { msg, err_code, err_data }
-	})?;
+		decode_incoming_update_add_htlc_onion(msg, node_signer, secp_ctx
+	)?;
 	Ok(match hop {
 		onion_utils::Hop::Forward { next_hop_data, next_hop_hmac, new_packet_bytes } => {
 			let NextPacketDetails {
@@ -7891,32 +7938,32 @@ where
 			} = match next_packet_details_opt {
 				Some(next_packet_details) => next_packet_details,
 				// Forward should always include the next hop details
-				None => return Err(InboundOnionErr {
-					msg: "Failed to decode update add htlc onion",
+				None => return Err(PeelOnionError::Fail {
 					err_code: 0x4000 | 22,
-					err_data: Vec::new(),
+					err_msg: "Failed to decode update add htlc onion",
+					shared_secret,
 				}),
 			};
 
-			if let Err((err_msg, code)) = check_incoming_htlc_cltv(
+			if let Err((err_msg, err_code)) = check_incoming_htlc_cltv(
 				cur_height, outgoing_cltv_value, msg.cltv_expiry
 			) {
-				return Err(InboundOnionErr {
-					msg: err_msg,
-					err_code: code,
-					err_data: Vec::new(),
-				});
+				return Err(PeelOnionError::Fail { err_code, err_msg, shared_secret });
 			}
 			create_fwd_pending_htlc_info(
 				msg, next_hop_data, next_hop_hmac, new_packet_bytes, shared_secret,
 				Some(next_packet_pubkey)
-			)?
+			).map_err(|e| PeelOnionError::Fail {
+				err_code: e.err_code, err_msg: e.msg, shared_secret
+			})?
 		},
 		onion_utils::Hop::Receive(received_data) => {
 			create_recv_pending_htlc_info(
 				received_data, shared_secret, msg.payment_hash, msg.amount_msat, msg.cltv_expiry,
 				None, false, msg.skimmed_fee_msat, cur_height, accept_mpp_keysend,
-			)?
+			).map_err(|e| PeelOnionError::Fail {
+				err_code: e.err_code, err_msg: e.msg, shared_secret
+			})?
 		}
 	})
 }
@@ -7928,29 +7975,17 @@ struct NextPacketDetails {
 	outgoing_cltv_value: u32,
 }
 
-fn decode_incoming_update_add_htlc_onion<NS: Deref, L: Deref, T: secp256k1::Verification>(
-	msg: &msgs::UpdateAddHTLC, node_signer: &NS, logger: &L, secp_ctx: &Secp256k1<T>,
-) -> Result<(onion_utils::Hop, [u8; 32], Option<NextPacketDetails>), HTLCFailureMsg>
+fn decode_incoming_update_add_htlc_onion<NS: Deref, T: secp256k1::Verification>(
+	msg: &msgs::UpdateAddHTLC, node_signer: &NS, secp_ctx: &Secp256k1<T>,
+) -> Result<(onion_utils::Hop, [u8; 32], Option<NextPacketDetails>), PeelOnionError>
 where
 	NS::Target: NodeSigner,
-	L::Target: Logger,
 {
-	macro_rules! return_malformed_err {
-		($msg: expr, $err_code: expr) => {
-			{
-				log_info!(logger, "Failed to accept/forward incoming HTLC: {}", $msg);
-				return Err(HTLCFailureMsg::Malformed(msgs::UpdateFailMalformedHTLC {
-					channel_id: msg.channel_id,
-					htlc_id: msg.htlc_id,
-					sha256_of_onion: Sha256::hash(&msg.onion_routing_packet.hop_data).into_inner(),
-					failure_code: $err_code,
-				}));
-			}
-		}
-	}
-
 	if let Err(_) = msg.onion_routing_packet.public_key {
-		return_malformed_err!("invalid ephemeral pubkey", 0x8000 | 0x4000 | 6);
+		return Err(PeelOnionError::FailMalformed {
+			err_code: 0x8000 | 0x4000 | 6,
+			err_msg: "invalid ephemeral pubkey",
+		});
 	}
 
 	let shared_secret = node_signer.ecdh(
@@ -7964,34 +7999,16 @@ where
 		//receiving node would have to brute force to figure out which version was put in the
 		//packet by the node that send us the message, in the case of hashing the hop_data, the
 		//node knows the HMAC matched, so they already know what is there...
-		return_malformed_err!("Unknown onion packet version", 0x8000 | 0x4000 | 4);
-	}
-	macro_rules! return_err {
-		($msg: expr, $err_code: expr, $data: expr) => {
-			{
-				log_info!(logger, "Failed to accept/forward incoming HTLC: {}", $msg);
-				return Err(HTLCFailureMsg::Relay(msgs::UpdateFailHTLC {
-					channel_id: msg.channel_id,
-					htlc_id: msg.htlc_id,
-					reason: HTLCFailReason::reason($err_code, $data.to_vec())
-						.get_encrypted_failure_packet(&shared_secret, &None),
-				}));
-			}
-		}
+		return Err(PeelOnionError::FailMalformed {
+			err_code: 0x8000 | 0x4000 | 4,
+			err_msg: "Unknown onion packet version",
+		});
 	}
 
-	let next_hop = match onion_utils::decode_next_payment_hop(
+	let next_hop = onion_utils::decode_next_payment_hop(
 		shared_secret, &msg.onion_routing_packet.hop_data[..], msg.onion_routing_packet.hmac,
 		msg.payment_hash, node_signer
-	) {
-		Ok(res) => res,
-		Err(onion_utils::OnionDecodeErr::Malformed { err_msg, err_code }) => {
-			return_malformed_err!(err_msg, err_code);
-		},
-		Err(onion_utils::OnionDecodeErr::Relay { err_msg, err_code }) => {
-			return_err!(err_msg, err_code, &[0; 0]);
-		},
-	};
+	).map_err(|e| PeelOnionError::from_onion_decode_err(e, shared_secret))?;
 
 	let next_packet_details = match next_hop {
 		onion_utils::Hop::Forward {
@@ -8010,7 +8027,11 @@ where
 		onion_utils::Hop::Forward { next_hop_data: msgs::InboundOnionPayload::Receive { .. }, .. } |
 			onion_utils::Hop::Forward { next_hop_data: msgs::InboundOnionPayload::BlindedReceive { .. }, .. } =>
 		{
-			return_err!("Final Node OnionHopData provided for us as an intermediary node", 0x4000 | 22, &[0; 0]);
+			return Err(PeelOnionError::Fail {
+				err_code: 0x4000 | 22,
+				err_msg: "Final Node OnionHopData provided for us as an intermediary node",
+				shared_secret,
+			});
 		}
 	};
 
@@ -12220,10 +12241,8 @@ mod tests {
 		).unwrap();
 
 		let msg = make_update_add_msg(amount_msat, cltv_expiry, payment_hash, onion);
-		let logger = test_utils::TestLogger::with_id("bob".to_string());
 
-		let peeled = peel_payment_onion(&msg, &&bob, &&logger, &secp_ctx, cur_height, true)
-			.map_err(|e| e.msg).unwrap();
+		let peeled = peel_payment_onion(&msg, &&bob, &secp_ctx, cur_height, true).unwrap();
 
 		let next_onion = match peeled.routing {
 			PendingHTLCRouting::Forward { onion_packet, short_channel_id: _ } => {
@@ -12233,8 +12252,7 @@ mod tests {
 		};
 
 		let msg2 = make_update_add_msg(amount_msat, cltv_expiry, payment_hash, next_onion);
-		let peeled2 = peel_payment_onion(&msg2, &&charlie, &&logger, &secp_ctx, cur_height, true)
-			.map_err(|e| e.msg).unwrap();
+		let peeled2 = peel_payment_onion(&msg2, &&charlie, &secp_ctx, cur_height, true).unwrap();
 
 		match peeled2.routing {
 			PendingHTLCRouting::ReceiveKeysend { payment_preimage, payment_data, incoming_cltv_expiry, .. } => {
