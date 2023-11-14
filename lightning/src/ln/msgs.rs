@@ -65,11 +65,11 @@ pub(crate) const MAX_VALUE_MSAT: u64 = 21_000_000_0000_0000_000;
 
 #[cfg(taproot)]
 /// A partial signature that also contains the Musig2 nonce its signer used
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct PartialSignatureWithNonce(pub musig2::types::PartialSignature, pub musig2::types::PublicNonce);
 
 /// An error in decoding a message or struct.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum DecodeError {
 	/// A version byte specified something we don't know how to handle.
 	///
@@ -96,7 +96,7 @@ pub enum DecodeError {
 /// An [`init`] message to be sent to or received from a peer.
 ///
 /// [`init`]: https://github.com/lightning/bolts/blob/master/01-messaging.md#the-init-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Init {
 	/// The relevant features which the sender supports.
 	pub features: InitFeatures,
@@ -116,7 +116,7 @@ pub struct Init {
 /// An [`error`] message to be sent to or received from a peer.
 ///
 /// [`error`]: https://github.com/lightning/bolts/blob/master/01-messaging.md#the-error-and-warning-messages
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ErrorMessage {
 	/// The channel ID involved in the error.
 	///
@@ -134,7 +134,7 @@ pub struct ErrorMessage {
 /// A [`warning`] message to be sent to or received from a peer.
 ///
 /// [`warning`]: https://github.com/lightning/bolts/blob/master/01-messaging.md#the-error-and-warning-messages
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct WarningMessage {
 	/// The channel ID involved in the warning.
 	///
@@ -151,7 +151,7 @@ pub struct WarningMessage {
 /// A [`ping`] message to be sent to or received from a peer.
 ///
 /// [`ping`]: https://github.com/lightning/bolts/blob/master/01-messaging.md#the-ping-and-pong-messages
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Ping {
 	/// The desired response length.
 	pub ponglen: u16,
@@ -164,7 +164,7 @@ pub struct Ping {
 /// A [`pong`] message to be sent to or received from a peer.
 ///
 /// [`pong`]: https://github.com/lightning/bolts/blob/master/01-messaging.md#the-ping-and-pong-messages
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Pong {
 	/// The pong packet size.
 	///
@@ -177,7 +177,7 @@ pub struct Pong {
 /// Used in V1 channel establishment
 ///
 /// [`open_channel`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#the-open_channel-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct OpenChannel {
 	/// The genesis hash of the blockchain where the channel is to be opened
 	pub chain_hash: ChainHash,
@@ -231,7 +231,7 @@ pub struct OpenChannel {
 /// Used in V2 channel establishment
 ///
 // TODO(dual_funding): Add spec link for `open_channel2`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct OpenChannelV2 {
 	/// The genesis hash of the blockchain where the channel is to be opened
 	pub chain_hash: ChainHash,
@@ -290,7 +290,7 @@ pub struct OpenChannelV2 {
 /// Used in V1 channel establishment
 ///
 /// [`accept_channel`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#the-accept_channel-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct AcceptChannel {
 	/// A temporary channel ID, until the funding outpoint is announced
 	pub temporary_channel_id: ChannelId,
@@ -338,7 +338,7 @@ pub struct AcceptChannel {
 /// Used in V2 channel establishment
 ///
 // TODO(dual_funding): Add spec link for `accept_channel2`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct AcceptChannelV2 {
 	/// The same `temporary_channel_id` received from the initiator's `open_channel2` message.
 	pub temporary_channel_id: ChannelId,
@@ -391,7 +391,7 @@ pub struct AcceptChannelV2 {
 /// Used in V1 channel establishment
 ///
 /// [`funding_created`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#the-funding_created-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct FundingCreated {
 	/// A temporary channel ID, until the funding is established
 	pub temporary_channel_id: ChannelId,
@@ -414,7 +414,7 @@ pub struct FundingCreated {
 /// Used in V1 channel establishment
 ///
 /// [`funding_signed`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#the-funding_signed-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct FundingSigned {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -428,7 +428,7 @@ pub struct FundingSigned {
 /// A [`channel_ready`] message to be sent to or received from a peer.
 ///
 /// [`channel_ready`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#the-channel_ready-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ChannelReady {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -441,10 +441,64 @@ pub struct ChannelReady {
 	pub short_channel_id_alias: Option<u64>,
 }
 
+/// An stfu (quiescence) message to be sent by or received from the stfu initiator.
+// TODO(splicing): Add spec link for `stfu`; still in draft, using from https://github.com/lightning/bolts/pull/863
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stfu {
+	/// The channel ID where quiescence is intended
+	pub channel_id: ChannelId,
+	/// Initiator flag, 1 if initiating, 0 if replying to an stfu.
+	pub initiator: u8,
+}
+
+/// A splice message to be sent by or received from the stfu initiator (splice initiator).
+// TODO(splicing): Add spec link for `splice`; still in draft, using from https://github.com/lightning/bolts/pull/863
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Splice {
+	/// The channel ID where splicing is intended
+	pub channel_id: ChannelId,
+	/// The genesis hash of the blockchain where the channel is intended to be spliced
+	pub chain_hash: ChainHash,
+	/// The intended change in channel capacity: the amount to be added (positive value)
+	/// or removed (negative value) by the sender (splice initiator) by splicing into/from the channel.
+	pub relative_satoshis: i64,
+	/// The feerate for the new funding transaction, set by the splice initiator
+	pub funding_feerate_perkw: u32,
+	/// The locktime for the new funding transaction
+	pub locktime: u32,
+	/// The key of the sender (splice initiator) controlling the new funding transaction
+	pub funding_pubkey: PublicKey,
+}
+
+/// A splice_ack message to be received by or sent to the splice initiator.
+///
+// TODO(splicing): Add spec link for `splice_ack`; still in draft, using from https://github.com/lightning/bolts/pull/863
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpliceAck {
+	/// The channel ID where splicing is intended
+	pub channel_id: ChannelId,
+	/// The genesis hash of the blockchain where the channel is intended to be spliced
+	pub chain_hash: ChainHash,
+	/// The intended change in channel capacity: the amount to be added (positive value)
+	/// or removed (negative value) by the sender (splice acceptor) by splicing into/from the channel.
+	pub relative_satoshis: i64,
+	/// The key of the sender (splice acceptor) controlling the new funding transaction
+	pub funding_pubkey: PublicKey,
+}
+
+/// A splice_locked message to be sent to or received from a peer.
+///
+// TODO(splicing): Add spec link for `splice_locked`; still in draft, using from https://github.com/lightning/bolts/pull/863
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpliceLocked {
+	/// The channel ID
+	pub channel_id: ChannelId,
+}
+
 /// A tx_add_input message for adding an input during interactive transaction construction
 ///
 // TODO(dual_funding): Add spec link for `tx_add_input`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TxAddInput {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -463,7 +517,7 @@ pub struct TxAddInput {
 /// A tx_add_output message for adding an output during interactive transaction construction.
 ///
 // TODO(dual_funding): Add spec link for `tx_add_output`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TxAddOutput {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -479,7 +533,7 @@ pub struct TxAddOutput {
 /// A tx_remove_input message for removing an input during interactive transaction construction.
 ///
 // TODO(dual_funding): Add spec link for `tx_remove_input`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TxRemoveInput {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -490,7 +544,7 @@ pub struct TxRemoveInput {
 /// A tx_remove_output message for removing an output during interactive transaction construction.
 ///
 // TODO(dual_funding): Add spec link for `tx_remove_output`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TxRemoveOutput {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -502,7 +556,7 @@ pub struct TxRemoveOutput {
 /// interactive transaction construction.
 ///
 // TODO(dual_funding): Add spec link for `tx_complete`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TxComplete {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -512,7 +566,7 @@ pub struct TxComplete {
 /// interactive transaction construction.
 ///
 // TODO(dual_funding): Add spec link for `tx_signatures`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TxSignatures {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -526,7 +580,7 @@ pub struct TxSignatures {
 /// completed.
 ///
 // TODO(dual_funding): Add spec link for `tx_init_rbf`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TxInitRbf {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -543,7 +597,7 @@ pub struct TxInitRbf {
 /// completed.
 ///
 // TODO(dual_funding): Add spec link for `tx_ack_rbf`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TxAckRbf {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -555,7 +609,7 @@ pub struct TxAckRbf {
 /// A tx_abort message which signals the cancellation of an in-progress transaction negotiation.
 ///
 // TODO(dual_funding): Add spec link for `tx_abort`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TxAbort {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -566,7 +620,7 @@ pub struct TxAbort {
 /// A [`shutdown`] message to be sent to or received from a peer.
 ///
 /// [`shutdown`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#closing-initiation-shutdown
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Shutdown {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -580,7 +634,7 @@ pub struct Shutdown {
 ///
 /// This is provided in [`ClosingSigned`] by both sides to indicate the fee range they are willing
 /// to use.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ClosingSignedFeeRange {
 	/// The minimum absolute fee, in satoshis, which the sender is willing to place on the closing
 	/// transaction.
@@ -593,7 +647,7 @@ pub struct ClosingSignedFeeRange {
 /// A [`closing_signed`] message to be sent to or received from a peer.
 ///
 /// [`closing_signed`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#closing-negotiation-closing_signed
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ClosingSigned {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -609,7 +663,7 @@ pub struct ClosingSigned {
 /// An [`update_add_htlc`] message to be sent to or received from a peer.
 ///
 /// [`update_add_htlc`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#adding-an-htlc-update_add_htlc
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UpdateAddHTLC {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -632,7 +686,7 @@ pub struct UpdateAddHTLC {
  /// An onion message to be sent to or received from a peer.
  ///
  // TODO: update with link to OM when they are merged into the BOLTs
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct OnionMessage {
 	/// Used in decrypting the onion packet's payload.
 	pub blinding_point: PublicKey,
@@ -643,7 +697,7 @@ pub struct OnionMessage {
 /// An [`update_fulfill_htlc`] message to be sent to or received from a peer.
 ///
 /// [`update_fulfill_htlc`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#removing-an-htlc-update_fulfill_htlc-update_fail_htlc-and-update_fail_malformed_htlc
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UpdateFulfillHTLC {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -656,7 +710,7 @@ pub struct UpdateFulfillHTLC {
 /// An [`update_fail_htlc`] message to be sent to or received from a peer.
 ///
 /// [`update_fail_htlc`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#removing-an-htlc-update_fulfill_htlc-update_fail_htlc-and-update_fail_malformed_htlc
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UpdateFailHTLC {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -668,7 +722,7 @@ pub struct UpdateFailHTLC {
 /// An [`update_fail_malformed_htlc`] message to be sent to or received from a peer.
 ///
 /// [`update_fail_malformed_htlc`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#removing-an-htlc-update_fulfill_htlc-update_fail_htlc-and-update_fail_malformed_htlc
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UpdateFailMalformedHTLC {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -682,7 +736,7 @@ pub struct UpdateFailMalformedHTLC {
 /// A [`commitment_signed`] message to be sent to or received from a peer.
 ///
 /// [`commitment_signed`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#committing-updates-so-far-commitment_signed
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct CommitmentSigned {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -698,7 +752,7 @@ pub struct CommitmentSigned {
 /// A [`revoke_and_ack`] message to be sent to or received from a peer.
 ///
 /// [`revoke_and_ack`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#completing-the-transition-to-the-updated-state-revoke_and_ack
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RevokeAndACK {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -714,7 +768,7 @@ pub struct RevokeAndACK {
 /// An [`update_fee`] message to be sent to or received from a peer
 ///
 /// [`update_fee`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#updating-fees-update_fee
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UpdateFee {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -725,7 +779,7 @@ pub struct UpdateFee {
 /// A [`channel_reestablish`] message to be sent to or received from a peer.
 ///
 /// [`channel_reestablish`]: https://github.com/lightning/bolts/blob/master/02-peer-protocol.md#message-retransmission
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ChannelReestablish {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -745,7 +799,7 @@ pub struct ChannelReestablish {
 /// An [`announcement_signatures`] message to be sent to or received from a peer.
 ///
 /// [`announcement_signatures`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-announcement_signatures-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct AnnouncementSignatures {
 	/// The channel ID
 	pub channel_id: ChannelId,
@@ -758,7 +812,7 @@ pub struct AnnouncementSignatures {
 }
 
 /// An address which can be used to connect to a remote peer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum SocketAddress {
 	/// An IPv4 address and port on which the peer is listening.
 	TcpIpV4 {
@@ -913,7 +967,7 @@ impl Readable for SocketAddress {
 }
 
 /// [`SocketAddress`] error variants
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum SocketAddressParseError {
 	/// Socket address (IPv4/IPv6) parsing error
 	SocketAddrParse,
@@ -1096,7 +1150,7 @@ impl<'a> Writeable for UnsignedGossipMessage<'a> {
 /// The unsigned part of a [`node_announcement`] message.
 ///
 /// [`node_announcement`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-node_announcement-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UnsignedNodeAnnouncement {
 	/// The advertised features
 	pub features: NodeFeatures,
@@ -1116,7 +1170,7 @@ pub struct UnsignedNodeAnnouncement {
 	pub(crate) excess_address_data: Vec<u8>,
 	pub(crate) excess_data: Vec<u8>,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 /// A [`node_announcement`] message to be sent to or received from a peer.
 ///
 /// [`node_announcement`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-node_announcement-message
@@ -1130,7 +1184,7 @@ pub struct NodeAnnouncement {
 /// The unsigned part of a [`channel_announcement`] message.
 ///
 /// [`channel_announcement`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-channel_announcement-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UnsignedChannelAnnouncement {
 	/// The advertised channel features
 	pub features: ChannelFeatures,
@@ -1155,7 +1209,7 @@ pub struct UnsignedChannelAnnouncement {
 /// A [`channel_announcement`] message to be sent to or received from a peer.
 ///
 /// [`channel_announcement`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-channel_announcement-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ChannelAnnouncement {
 	/// Authentication of the announcement by the first public node
 	pub node_signature_1: Signature,
@@ -1172,7 +1226,7 @@ pub struct ChannelAnnouncement {
 /// The unsigned part of a [`channel_update`] message.
 ///
 /// [`channel_update`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-channel_update-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UnsignedChannelUpdate {
 	/// The genesis hash of the blockchain where the channel is to be opened
 	pub chain_hash: ChainHash,
@@ -1210,7 +1264,7 @@ pub struct UnsignedChannelUpdate {
 /// A [`channel_update`] message to be sent to or received from a peer.
 ///
 /// [`channel_update`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-channel_update-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ChannelUpdate {
 	/// A signature of the channel update
 	pub signature: Signature,
@@ -1224,7 +1278,7 @@ pub struct ChannelUpdate {
 /// messages.
 ///
 /// [`query_channel_range`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-query_channel_range-and-reply_channel_range-messages
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct QueryChannelRange {
 	/// The genesis hash of the blockchain being queried
 	pub chain_hash: ChainHash,
@@ -1245,7 +1299,7 @@ pub struct QueryChannelRange {
 /// serialization and do not support `encoding_type=1` zlib serialization.
 ///
 /// [`reply_channel_range`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-query_channel_range-and-reply_channel_range-messages
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ReplyChannelRange {
 	/// The genesis hash of the blockchain being queried
 	pub chain_hash: ChainHash,
@@ -1270,7 +1324,7 @@ pub struct ReplyChannelRange {
 /// serialization and do not support `encoding_type=1` zlib serialization.
 ///
 /// [`query_short_channel_ids`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-query_short_channel_idsreply_short_channel_ids_end-messages
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct QueryShortChannelIds {
 	/// The genesis hash of the blockchain being queried
 	pub chain_hash: ChainHash,
@@ -1284,7 +1338,7 @@ pub struct QueryShortChannelIds {
 /// a perfect view of the network.
 ///
 /// [`reply_short_channel_ids_end`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-query_short_channel_idsreply_short_channel_ids_end-messages
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ReplyShortChannelIdsEnd {
 	/// The genesis hash of the blockchain that was queried
 	pub chain_hash: ChainHash,
@@ -1298,7 +1352,7 @@ pub struct ReplyShortChannelIdsEnd {
 /// `gossip_queries` feature has been negotiated.
 ///
 /// [`gossip_timestamp_filter`]: https://github.com/lightning/bolts/blob/master/07-routing-gossip.md#the-gossip_timestamp_filter-message
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct GossipTimestampFilter {
 	/// The genesis hash of the blockchain for channel and node information
 	pub chain_hash: ChainHash,
@@ -1317,7 +1371,7 @@ enum EncodingType {
 }
 
 /// Used to put an error message in a [`LightningError`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Hash, PartialEq)]
 pub enum ErrorAction {
 	/// The peer took some action which made us think they were useless. Disconnect them.
 	DisconnectPeer {
@@ -1366,7 +1420,7 @@ pub struct LightningError {
 
 /// Struct used to return values from [`RevokeAndACK`] messages, containing a bunch of commitment
 /// transaction updates if they were pending.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct CommitmentUpdate {
 	/// `update_add_htlc` messages which should be sent
 	pub update_add_htlcs: Vec<UpdateAddHTLC>,
@@ -1408,6 +1462,18 @@ pub trait ChannelMessageHandler : MessageSendEventsProvider {
 	fn handle_shutdown(&self, their_node_id: &PublicKey, msg: &Shutdown);
 	/// Handle an incoming `closing_signed` message from the given peer.
 	fn handle_closing_signed(&self, their_node_id: &PublicKey, msg: &ClosingSigned);
+
+	// Quiescence
+	/// Handle an incoming `stfu` message from the given peer.
+	fn handle_stfu(&self, their_node_id: &PublicKey, msg: &Stfu);
+
+	// Splicing
+	/// Handle an incoming `splice` message from the given peer.
+	fn handle_splice(&self, their_node_id: &PublicKey, msg: &Splice);
+	/// Handle an incoming `splice_ack` message from the given peer.
+	fn handle_splice_ack(&self, their_node_id: &PublicKey, msg: &SpliceAck);
+	/// Handle an incoming `splice_locked` message from the given peer.
+	fn handle_splice_locked(&self, their_node_id: &PublicKey, msg: &SpliceLocked);
 
 	// Interactive channel construction
 	/// Handle an incoming `tx_add_input message` from the given peer.
@@ -1709,7 +1775,7 @@ impl fmt::Debug for OnionPacket {
 	}
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct OnionErrorPacket {
 	// This really should be a constant size slice, but the spec lets these things be up to 128KB?
 	// (TODO) We limit it in decode to much lower...
@@ -1804,6 +1870,31 @@ impl_writeable_msg!(AcceptChannelV2, {
 	(1, channel_type, option),
 	(2, require_confirmed_inputs, option),
 });
+
+impl_writeable_msg!(Stfu, {
+	channel_id,
+	initiator,
+}, {});
+
+impl_writeable_msg!(Splice, {
+	channel_id,
+	chain_hash,
+	relative_satoshis,
+	funding_feerate_perkw,
+	locktime,
+	funding_pubkey,
+}, {});
+
+impl_writeable_msg!(SpliceAck, {
+	channel_id,
+	chain_hash,
+	relative_satoshis,
+	funding_pubkey,
+}, {});
+
+impl_writeable_msg!(SpliceLocked, {
+	channel_id,
+}, {});
 
 impl_writeable_msg!(TxAddInput, {
 	channel_id,
@@ -3355,6 +3446,55 @@ mod tests {
 		let encoded_value = channel_ready.encode();
 		let target_value = hex::decode("0202020202020202020202020202020202020202020202020202020202020202031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f").unwrap();
 		assert_eq!(encoded_value, target_value);
+	}
+
+	#[test]
+	fn encoding_splice() {
+		let secp_ctx = Secp256k1::new();
+		let (_, pubkey_1,) = get_keys_from!("0101010101010101010101010101010101010101010101010101010101010101", secp_ctx);
+		let splice = msgs::Splice {
+			chain_hash: ChainHash::from_hex("6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000").unwrap(),
+			channel_id: ChannelId::from_bytes([2; 32]),
+			relative_satoshis: 123456,
+			funding_feerate_perkw: 2000,
+			locktime: 0,
+			funding_pubkey: pubkey_1,
+		};
+		let encoded_value = splice.encode();
+		assert_eq!(hex::encode(encoded_value), "02020202020202020202020202020202020202020202020202020202020202026fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000000000000001e240000007d000000000031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f");
+	}
+
+	#[test]
+	fn encoding_stfu() {
+		let stfu = msgs::Stfu {
+			channel_id: ChannelId::from_bytes([2; 32]),
+			initiator: 1,
+		};
+		let encoded_value = stfu.encode();
+		assert_eq!(hex::encode(encoded_value), "020202020202020202020202020202020202020202020202020202020202020201");
+	}
+
+	#[test]
+	fn encoding_splice_ack() {
+		let secp_ctx = Secp256k1::new();
+		let (_, pubkey_1,) = get_keys_from!("0101010101010101010101010101010101010101010101010101010101010101", secp_ctx);
+		let splice = msgs::SpliceAck {
+			chain_hash: ChainHash::from_hex("6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000").unwrap(),
+			channel_id: ChannelId::from_bytes([2; 32]),
+			relative_satoshis: 123456,
+			funding_pubkey: pubkey_1,
+		};
+		let encoded_value = splice.encode();
+		assert_eq!(hex::encode(encoded_value), "02020202020202020202020202020202020202020202020202020202020202026fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000000000000001e240031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f");
+	}
+
+	#[test]
+	fn encoding_splice_locked() {
+		let splice = msgs::SpliceLocked {
+			channel_id: ChannelId::from_bytes([2; 32]),
+		};
+		let encoded_value = splice.encode();
+		assert_eq!(hex::encode(encoded_value), "0202020202020202020202020202020202020202020202020202020202020202");
 	}
 
 	#[test]

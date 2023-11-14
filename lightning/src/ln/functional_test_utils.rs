@@ -30,6 +30,8 @@ use crate::util::test_utils::{panicking, TestChainMonitor, TestScorer, TestKeysI
 use crate::util::errors::APIError;
 use crate::util::config::{UserConfig, MaxDustHTLCExposure};
 use crate::util::ser::{ReadableArgs, Writeable};
+#[cfg(test)]
+use crate::util::logger::Logger;
 
 use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::transaction::{Transaction, TxOut};
@@ -436,6 +438,25 @@ impl<'a, 'b, 'c> Node<'a, 'b, 'c> {
 	pub fn get_block_header(&self, height: u32) -> BlockHeader {
 		self.blocks.lock().unwrap()[height as usize].0.header
 	}
+	/// Changes the channel signer's availability for the specified peer and channel.
+	///
+	/// When `available` is set to `true`, the channel signer will behave normally. When set to
+	/// `false`, the channel signer will act like an off-line remote signer and will return `Err` for
+	/// several of the signing methods. Currently, only `get_per_commitment_point` and
+	/// `release_commitment_secret` are affected by this setting.
+	#[cfg(test)]
+	pub fn set_channel_signer_available(&self, peer_id: &PublicKey, chan_id: &ChannelId, available: bool) {
+		let per_peer_state = self.node.per_peer_state.read().unwrap();
+		let chan_lock = per_peer_state.get(peer_id).unwrap().lock().unwrap();
+		let signer = (|| {
+			match chan_lock.channel_by_id.get(chan_id) {
+				Some(phase) => phase.context().get_signer(),
+				None => panic!("Couldn't find a channel with id {}", chan_id),
+			}
+		})();
+		log_debug!(self.logger, "Setting channel signer for {} as available={}", chan_id, available);
+		signer.as_ecdsa().unwrap().set_available(available);
+	}
 }
 
 /// If we need an unsafe pointer to a `Node` (ie to reference it in a thread
@@ -793,6 +814,18 @@ pub fn remove_first_msg_event_to_node(msg_node_id: &PublicKey, msg_events: &mut 
 		MessageSendEvent::SendOpenChannelV2 { node_id, .. } => {
 			node_id == msg_node_id
 		},
+		MessageSendEvent::SendStfu { node_id, .. } => {
+			node_id == msg_node_id
+		},
+		MessageSendEvent::SendSplice { node_id, .. } => {
+			node_id == msg_node_id
+		},
+		MessageSendEvent::SendSpliceAck { node_id, .. } => {
+			node_id == msg_node_id
+		},
+		MessageSendEvent::SendSpliceLocked { node_id, .. } => {
+			node_id == msg_node_id
+		},
 		MessageSendEvent::SendTxAddInput { node_id, .. } => {
 			node_id == msg_node_id
 		},
@@ -924,7 +957,8 @@ macro_rules! unwrap_send_err {
 pub fn check_added_monitors<CM: AChannelManager, H: NodeHolder<CM=CM>>(node: &H, count: usize) {
 	if let Some(chain_monitor) = node.chain_monitor() {
 		let mut added_monitors = chain_monitor.added_monitors.lock().unwrap();
-		assert_eq!(added_monitors.len(), count);
+		let n = added_monitors.len();
+		assert_eq!(n, count, "expected {} monitors to be added, not {}", count, n);
 		added_monitors.clear();
 	}
 }
@@ -1104,7 +1138,7 @@ pub fn open_zero_conf_channel<'a, 'b, 'c, 'd>(initiator: &'a Node<'b, 'c, 'd>, r
 	let initiator_channels = initiator.node.list_usable_channels().len();
 	let receiver_channels = receiver.node.list_usable_channels().len();
 
-	initiator.node.create_channel(receiver.node.get_our_node_id(), 100_000, 10_001, 42, initiator_config).unwrap();
+	initiator.node.create_channel(receiver.node.get_our_node_id(), 100_000, 10_001, 42, None, initiator_config).unwrap();
 	let open_channel = get_event_msg!(initiator, MessageSendEvent::SendOpenChannel, receiver.node.get_our_node_id());
 
 	receiver.node.handle_open_channel(&initiator.node.get_our_node_id(), &open_channel);
@@ -1170,7 +1204,7 @@ pub fn open_zero_conf_channel<'a, 'b, 'c, 'd>(initiator: &'a Node<'b, 'c, 'd>, r
 }
 
 pub fn create_chan_between_nodes_with_value_init<'a, 'b, 'c>(node_a: &Node<'a, 'b, 'c>, node_b: &Node<'a, 'b, 'c>, channel_value: u64, push_msat: u64) -> Transaction {
-	let create_chan_id = node_a.node.create_channel(node_b.node.get_our_node_id(), channel_value, push_msat, 42, None).unwrap();
+	let create_chan_id = node_a.node.create_channel(node_b.node.get_our_node_id(), channel_value, push_msat, 42, None, None).unwrap();
 	let open_channel_msg = get_event_msg!(node_a, MessageSendEvent::SendOpenChannel, node_b.node.get_our_node_id());
 	assert_eq!(open_channel_msg.temporary_channel_id, create_chan_id);
 	assert_eq!(node_a.node.list_channels().iter().find(|channel| channel.channel_id == create_chan_id).unwrap().user_channel_id, 42);
@@ -1287,7 +1321,7 @@ pub fn create_announced_chan_between_nodes_with_value<'a, 'b, 'c: 'd, 'd>(nodes:
 pub fn create_unannounced_chan_between_nodes_with_value<'a, 'b, 'c, 'd>(nodes: &'a Vec<Node<'b, 'c, 'd>>, a: usize, b: usize, channel_value: u64, push_msat: u64) -> (msgs::ChannelReady, Transaction) {
 	let mut no_announce_cfg = test_default_channel_config();
 	no_announce_cfg.channel_handshake_config.announced_channel = false;
-	nodes[a].node.create_channel(nodes[b].node.get_our_node_id(), channel_value, push_msat, 42, Some(no_announce_cfg)).unwrap();
+	nodes[a].node.create_channel(nodes[b].node.get_our_node_id(), channel_value, push_msat, 42, None, Some(no_announce_cfg)).unwrap();
 	let open_channel = get_event_msg!(nodes[a], MessageSendEvent::SendOpenChannel, nodes[b].node.get_our_node_id());
 	nodes[b].node.handle_open_channel(&nodes[a].node.get_our_node_id(), &open_channel);
 	let accept_channel = get_event_msg!(nodes[b], MessageSendEvent::SendAcceptChannel, nodes[a].node.get_our_node_id());
@@ -2119,12 +2153,13 @@ macro_rules! expect_channel_shutdown_state {
 }
 
 #[cfg(any(test, ldk_bench, feature = "_test_utils"))]
-pub fn expect_channel_pending_event<'a, 'b, 'c, 'd>(node: &'a Node<'b, 'c, 'd>, expected_counterparty_node_id: &PublicKey) {
+pub fn expect_channel_pending_event<'a, 'b, 'c, 'd>(node: &'a Node<'b, 'c, 'd>, expected_counterparty_node_id: &PublicKey) -> ChannelId {
 	let events = node.node.get_and_clear_pending_events();
 	assert_eq!(events.len(), 1);
-	match events[0] {
-		crate::events::Event::ChannelPending { ref counterparty_node_id, .. } => {
+	match &events[0] {
+		crate::events::Event::ChannelPending { channel_id, counterparty_node_id, .. } => {
 			assert_eq!(*expected_counterparty_node_id, *counterparty_node_id);
+			*channel_id
 		},
 		_ => panic!("Unexpected event"),
 	}
@@ -2140,6 +2175,26 @@ pub fn expect_channel_ready_event<'a, 'b, 'c, 'd>(node: &'a Node<'b, 'c, 'd>, ex
 		},
 		_ => panic!("Unexpected event"),
 	}
+}
+
+#[cfg(any(test, feature = "_test_utils"))]
+pub fn expect_probe_successful_events(node: &Node, mut probe_results: Vec<(PaymentHash, PaymentId)>) {
+	let mut events = node.node.get_and_clear_pending_events();
+
+	for event in events.drain(..) {
+		match event {
+			Event::ProbeSuccessful { payment_hash: ev_ph, payment_id: ev_pid, ..} => {
+				let result_idx = probe_results.iter().position(|(payment_hash, payment_id)| *payment_hash == ev_ph && *payment_id == ev_pid);
+				assert!(result_idx.is_some());
+
+				probe_results.remove(result_idx.unwrap());
+			},
+			_ => panic!(),
+		}
+	};
+
+	// Ensure that we received a ProbeSuccessful event for each probe result.
+	assert!(probe_results.is_empty());
 }
 
 pub struct PaymentFailedConditions<'a> {
@@ -2279,21 +2334,41 @@ pub fn send_along_route_with_secret<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, 
 	payment_id
 }
 
-pub fn do_pass_along_path<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expected_path: &[&Node<'a, 'b, 'c>], recv_value: u64, our_payment_hash: PaymentHash, our_payment_secret: Option<PaymentSecret>, ev: MessageSendEvent, payment_claimable_expected: bool, clear_recipient_events: bool, expected_preimage: Option<PaymentPreimage>) -> Option<Event> {
+fn fail_payment_along_path<'a, 'b, 'c>(expected_path: &[&Node<'a, 'b, 'c>]) {
+	let origin_node_id = expected_path[0].node.get_our_node_id();
+
+	// iterate from the receiving node to the origin node and handle update fail htlc.
+	for (&node, &prev_node) in expected_path.iter().rev().zip(expected_path.iter().rev().skip(1)) {
+		let updates = get_htlc_update_msgs!(node, prev_node.node.get_our_node_id());
+		prev_node.node.handle_update_fail_htlc(&node.node.get_our_node_id(), &updates.update_fail_htlcs[0]);
+		check_added_monitors!(prev_node, 0);
+
+		let is_first_hop = origin_node_id == prev_node.node.get_our_node_id();
+		// We do not want to fail backwards on the first hop. All other hops should fail backwards.
+		commitment_signed_dance!(prev_node, node, updates.commitment_signed, !is_first_hop);
+	}
+}
+
+pub fn do_pass_along_path<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expected_path: &[&Node<'a, 'b, 'c>], recv_value: u64, our_payment_hash: PaymentHash, our_payment_secret: Option<PaymentSecret>, ev: MessageSendEvent, payment_claimable_expected: bool, clear_recipient_events: bool, expected_preimage: Option<PaymentPreimage>, is_probe: bool) -> Option<Event> {
 	let mut payment_event = SendEvent::from_event(ev);
 	let mut prev_node = origin_node;
 	let mut event = None;
 
 	for (idx, &node) in expected_path.iter().enumerate() {
+		let is_last_hop = idx == expected_path.len() - 1;
 		assert_eq!(node.node.get_our_node_id(), payment_event.node_id);
 
 		node.node.handle_update_add_htlc(&prev_node.node.get_our_node_id(), &payment_event.msgs[0]);
 		check_added_monitors!(node, 0);
-		commitment_signed_dance!(node, prev_node, payment_event.commitment_msg, false);
 
-		expect_pending_htlcs_forwardable!(node);
+		if is_last_hop && is_probe {
+			commitment_signed_dance!(node, prev_node, payment_event.commitment_msg, true, true);
+		} else {
+			commitment_signed_dance!(node, prev_node, payment_event.commitment_msg, false);
+			expect_pending_htlcs_forwardable!(node);
+		}
 
-		if idx == expected_path.len() - 1 && clear_recipient_events {
+		if is_last_hop && clear_recipient_events {
 			let events_2 = node.node.get_and_clear_pending_events();
 			if payment_claimable_expected {
 				assert_eq!(events_2.len(), 1);
@@ -2327,7 +2402,7 @@ pub fn do_pass_along_path<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expected_p
 			} else {
 				assert!(events_2.is_empty());
 			}
-		} else if idx != expected_path.len() - 1 {
+		} else if !is_last_hop {
 			let mut events_2 = node.node.get_and_clear_pending_msg_events();
 			assert_eq!(events_2.len(), 1);
 			check_added_monitors!(node, 1);
@@ -2341,16 +2416,33 @@ pub fn do_pass_along_path<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expected_p
 }
 
 pub fn pass_along_path<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expected_path: &[&Node<'a, 'b, 'c>], recv_value: u64, our_payment_hash: PaymentHash, our_payment_secret: Option<PaymentSecret>, ev: MessageSendEvent, payment_claimable_expected: bool, expected_preimage: Option<PaymentPreimage>) -> Option<Event> {
-	do_pass_along_path(origin_node, expected_path, recv_value, our_payment_hash, our_payment_secret, ev, payment_claimable_expected, true, expected_preimage)
+	do_pass_along_path(origin_node, expected_path, recv_value, our_payment_hash, our_payment_secret, ev, payment_claimable_expected, true, expected_preimage, false)
+}
+
+pub fn send_probe_along_route<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expected_route: &[&[&Node<'a, 'b, 'c>]]) {
+	let mut events = origin_node.node.get_and_clear_pending_msg_events();
+	assert_eq!(events.len(), expected_route.len());
+
+	check_added_monitors!(origin_node, expected_route.len());
+
+	for path in expected_route.iter() {
+		let ev = remove_first_msg_event_to_node(&path[0].node.get_our_node_id(), &mut events);
+
+		do_pass_along_path(origin_node, path, 0, PaymentHash([0_u8; 32]), None, ev, false, false, None, true);
+		let nodes_to_fail_payment: Vec<_> = vec![origin_node].into_iter().chain(path.iter().cloned()).collect();
+
+		fail_payment_along_path(nodes_to_fail_payment.as_slice());
+	}
 }
 
 pub fn pass_along_route<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expected_route: &[&[&Node<'a, 'b, 'c>]], recv_value: u64, our_payment_hash: PaymentHash, our_payment_secret: PaymentSecret) {
 	let mut events = origin_node.node.get_and_clear_pending_msg_events();
 	assert_eq!(events.len(), expected_route.len());
+
 	for (path_idx, expected_path) in expected_route.iter().enumerate() {
 		let ev = remove_first_msg_event_to_node(&expected_path[0].node.get_our_node_id(), &mut events);
 		// Once we've gotten through all the HTLCs, the last one should result in a
-		// PaymentClaimable (but each previous one should not!), .
+		// PaymentClaimable (but each previous one should not!).
 		let expect_payment = path_idx == expected_route.len() - 1;
 		pass_along_path(origin_node, expected_path, recv_value, our_payment_hash.clone(), Some(our_payment_secret), ev, expect_payment, None);
 	}
@@ -3175,24 +3267,28 @@ pub fn reconnect_nodes<'a, 'b, 'c, 'd>(args: ReconnectArgs<'a, 'b, 'c, 'd>) {
 		// If a expects a channel_ready, it better not think it has received a revoke_and_ack
 		// from b
 		for reestablish in reestablish_1.iter() {
-			assert_eq!(reestablish.next_remote_commitment_number, 0);
+			let n = reestablish.next_remote_commitment_number;
+			assert_eq!(n, 0, "expected a->b next_remote_commitment_number to be 0, got {}", n);
 		}
 	}
 	if send_channel_ready.1 {
 		// If b expects a channel_ready, it better not think it has received a revoke_and_ack
 		// from a
 		for reestablish in reestablish_2.iter() {
-			assert_eq!(reestablish.next_remote_commitment_number, 0);
+			let n = reestablish.next_remote_commitment_number;
+			assert_eq!(n, 0, "expected b->a next_remote_commitment_number to be 0, got {}", n);
 		}
 	}
 	if send_channel_ready.0 || send_channel_ready.1 {
 		// If we expect any channel_ready's, both sides better have set
 		// next_holder_commitment_number to 1
 		for reestablish in reestablish_1.iter() {
-			assert_eq!(reestablish.next_local_commitment_number, 1);
+			let n = reestablish.next_local_commitment_number;
+			assert_eq!(n, 1, "expected a->b next_local_commitment_number to be 1, got {}", n);
 		}
 		for reestablish in reestablish_2.iter() {
-			assert_eq!(reestablish.next_local_commitment_number, 1);
+			let n = reestablish.next_local_commitment_number;
+			assert_eq!(n, 1, "expected b->a next_local_commitment_number to be 1, got {}", n);
 		}
 	}
 
@@ -3354,6 +3450,7 @@ pub fn create_batch_channel_funding<'a, 'b, 'c>(
 		// Initialize channel opening.
 		let temp_chan_id = funding_node.node.create_channel(
 			other_node.node.get_our_node_id(), *channel_value_satoshis, *push_msat, *user_channel_id,
+			None,
 			*override_config,
 		).unwrap();
 		let open_channel_msg = get_event_msg!(funding_node, MessageSendEvent::SendOpenChannel, other_node.node.get_our_node_id());
